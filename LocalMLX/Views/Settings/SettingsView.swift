@@ -6,6 +6,8 @@ struct SettingsView: View {
 
     @State private var testState: TestState = .idle
     @State private var launchState: LaunchState = .idle
+    @State private var modelStatus: ModelDownloadStatus = .unknown(reason: "checking…")
+    @State private var isCheckingStatus: Bool = false
 
     enum TestState: Equatable {
         case idle
@@ -38,6 +40,8 @@ struct SettingsView: View {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text("Model")
                     modelCatalogMenu
+                    Spacer()
+                    modelStatusBadge
                 }
                 TextField("Model path",
                           text: $settings.mlxModelPath,
@@ -65,13 +69,16 @@ struct SettingsView: View {
 
                 // Row 2 — model management. Split out of row 1 so four
                 // buttons don't overflow the 480px-wide Settings window.
+                // Button enablement is driven by `modelStatus`: Download
+                // when not cached (or unknown), Update only when there's
+                // a newer revision upstream.
                 HStack {
                     Button("Download Model…") { downloadModel() }
-                        .disabled(settings.mlxModelPath.trimmingCharacters(in: .whitespaces).isEmpty)
-                        .help("Pre-fetches the selected model via huggingface-cli so you can see real download progress in Terminal. Once it finishes, Start Server is instant because the weights are already cached.")
+                        .disabled(!canDownload)
+                        .help("Pre-fetches the selected model via huggingface-cli so you can see real download progress in Terminal. Enabled when the model isn't cached locally.")
                     Button("Update Model…") { updateModel() }
-                        .disabled(settings.mlxModelPath.trimmingCharacters(in: .whitespaces).isEmpty)
-                        .help("Forces a fresh re-download, replacing the cached copy with the newest mlx-community build. Use this when a model has been re-quantised or converted with a newer mlx-vlm.")
+                        .disabled(!canUpdate)
+                        .help("Forces a fresh re-download, replacing the cached copy with the latest mlx-community build. Only enabled when LocalMLX has detected a newer revision on HuggingFace than what you have cached.")
                     Button("Install MLX…") { installMLX() }
                         .help("First-time setup: creates a Python virtualenv at ~/mlx-env and installs mlx-lm inside it. Opens in Terminal so you can watch the install.")
                     Spacer()
@@ -115,6 +122,83 @@ struct SettingsView: View {
         }
         .padding(20)
         .frame(width: 480)
+        // Refresh the download status whenever the user picks a
+        // different model. Debounced so typing in the custom-path
+        // field doesn't fire a request per keystroke.
+        .task(id: settings.mlxModelPath) {
+            await refreshModelStatus()
+        }
+    }
+
+    private var canDownload: Bool {
+        let hasPath = !settings.mlxModelPath.trimmingCharacters(in: .whitespaces).isEmpty
+        return hasPath && modelStatus.canDownload
+    }
+
+    private var canUpdate: Bool {
+        let hasPath = !settings.mlxModelPath.trimmingCharacters(in: .whitespaces).isEmpty
+        return hasPath && modelStatus.canUpdate
+    }
+
+    /// Compact label next to the model picker. Tells the user whether
+    /// the currently selected model is cached, updatable, or not yet
+    /// downloaded — and explains why a button is greyed out.
+    @ViewBuilder
+    private var modelStatusBadge: some View {
+        if settings.mlxModelPath.trimmingCharacters(in: .whitespaces).isEmpty {
+            EmptyView()
+        } else if isCheckingStatus {
+            HStack(spacing: 4) {
+                ProgressView().controlSize(.small)
+                Text("checking…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        } else {
+            switch modelStatus {
+            case .notDownloaded:
+                Label("Not downloaded", systemImage: "arrow.down.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            case .upToDate:
+                Label("Up to date", systemImage: "checkmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.green)
+            case .updateAvailable:
+                Label("Update available", systemImage: "arrow.clockwise.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            case .unknown:
+                Label("Status unknown", systemImage: "questionmark.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .help("Couldn't reach HuggingFace to compare revisions. Download stays enabled so you can try anyway.")
+            }
+        }
+    }
+
+    /// Debounced status refresh. Exits early if the model path is
+    /// blank or if the task is cancelled during the debounce window
+    /// (which happens every time SwiftUI restarts this .task on a new
+    /// `mlxModelPath` value — typing in the TextField cancels the
+    /// in-flight check and starts a new one).
+    private func refreshModelStatus() async {
+        let path = settings.mlxModelPath.trimmingCharacters(in: .whitespaces)
+        guard !path.isEmpty else {
+            modelStatus = .unknown(reason: "no model selected")
+            return
+        }
+        // 400 ms debounce so typing doesn't fire one request per keystroke.
+        try? await Task.sleep(nanoseconds: 400_000_000)
+        if Task.isCancelled { return }
+
+        isCheckingStatus = true
+        defer { isCheckingStatus = false }
+
+        let status = await ModelDownloadStatusResolver.resolve(repoId: path)
+        if !Task.isCancelled {
+            modelStatus = status
+        }
     }
 
     @ViewBuilder private var testStatusView: some View {

@@ -44,6 +44,12 @@ targets:
       properties:
         com.apple.security.app-sandbox: true
         com.apple.security.network.client: true
+        # Read-only exception for the HuggingFace hub cache so LocalMLX
+        # can tell whether a selected model is already downloaded locally
+        # (and which revision) without asking the user for file-picker
+        # consent. The exception is scoped to that one subdirectory.
+        com.apple.security.temporary-exception.files.home-relative-path.read-only:
+          - .cache/huggingface/hub/
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.localmlx.LocalMLX
