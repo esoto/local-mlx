@@ -355,6 +355,97 @@ final class ChatViewModelTests: XCTestCase {
         XCTAssertFalse(convo.messages.contains(where: { $0 === target }))
     }
 
+    // MARK: - Orphaned stream reconciliation
+
+    func test_reconcile_marksOrphanedEmptyAssistant() throws {
+        let (vm, _, container, convo) = try makeFixtures()
+        let ctx = container.mainContext
+
+        // Simulate the "app crashed mid-stream" state: a user message
+        // plus a freshly-inserted empty assistant placeholder with no
+        // interruption reason — exactly the shape SwiftData's autosave
+        // would persist if we were killed before the streaming task
+        // could finalize.
+        let user = Message(role: .user, content: "hi",
+                           createdAt: Date(timeIntervalSince1970: 1),
+                           conversation: convo)
+        let orphan = Message(role: .assistant, content: "",
+                             createdAt: Date(timeIntervalSince1970: 2),
+                             conversation: convo)
+        ctx.insert(user)
+        ctx.insert(orphan)
+        try ctx.save()
+
+        XCTAssertNil(orphan.interruptionReason)
+        vm.reconcileInterruptedMessages(in: convo)
+
+        XCTAssertNotNil(orphan.interruptionReason,
+                        "orphaned empty assistant should be stamped")
+        XCTAssertTrue(orphan.interruptionReason?.contains("interrupted") ?? false)
+    }
+
+    func test_reconcile_leavesAssistantsWithContentAlone() throws {
+        let (vm, _, container, convo) = try makeFixtures()
+        let ctx = container.mainContext
+
+        let done = Message(role: .assistant, content: "full reply",
+                           createdAt: .now, conversation: convo)
+        ctx.insert(done)
+        try ctx.save()
+
+        vm.reconcileInterruptedMessages(in: convo)
+        XCTAssertNil(done.interruptionReason,
+                     "completed assistants must not be marked interrupted")
+    }
+
+    func test_reconcile_leavesAlreadyInterruptedAlone() throws {
+        let (vm, _, container, convo) = try makeFixtures()
+        let ctx = container.mainContext
+
+        let priorReason = "Server error 500: boom"
+        let already = Message(role: .assistant, content: "",
+                              createdAt: .now, conversation: convo,
+                              interruptionReason: priorReason)
+        ctx.insert(already)
+        try ctx.save()
+
+        vm.reconcileInterruptedMessages(in: convo)
+        XCTAssertEqual(already.interruptionReason, priorReason,
+                       "previously-stamped interruptions must not be overwritten")
+    }
+
+    func test_reconcile_ignoresUserMessages() throws {
+        let (vm, _, container, convo) = try makeFixtures()
+        let ctx = container.mainContext
+
+        let empty = Message(role: .user, content: "",
+                            createdAt: .now, conversation: convo)
+        ctx.insert(empty)
+        try ctx.save()
+
+        vm.reconcileInterruptedMessages(in: convo)
+        XCTAssertNil(empty.interruptionReason,
+                     "an empty user message is not 'interrupted' in any sense")
+    }
+
+    func test_reconcile_isIdempotent() throws {
+        let (vm, _, container, convo) = try makeFixtures()
+        let ctx = container.mainContext
+
+        let orphan = Message(role: .assistant, content: "",
+                             createdAt: .now, conversation: convo)
+        ctx.insert(orphan)
+        try ctx.save()
+
+        vm.reconcileInterruptedMessages(in: convo)
+        let firstReason = orphan.interruptionReason
+        XCTAssertNotNil(firstReason)
+
+        vm.reconcileInterruptedMessages(in: convo)
+        XCTAssertEqual(orphan.interruptionReason, firstReason,
+                       "second sweep should be a no-op")
+    }
+
     // MARK: - branch
 
     func test_branch_createsNewConversationWithMessagesFromPivotOnward() async throws {

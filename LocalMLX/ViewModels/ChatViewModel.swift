@@ -259,6 +259,43 @@ final class ChatViewModel {
     /// Dismiss the error banner.
     func dismissError() { errorBanner = nil }
 
+    /// Sweep the conversation for assistant messages that are "stuck" in
+    /// the pre-streaming state — empty `content` and nil
+    /// `interruptionReason`. Those happen when a streaming task was
+    /// abandoned before it could finalize: app quit mid-stream, server
+    /// disconnect before first delta, process crash, etc. SwiftData's
+    /// autosave persists the empty placeholder from the initial insert,
+    /// so on the next launch `MessageBubble` shows a ProgressView spinner
+    /// forever because nothing ever transitions the message away from
+    /// its "streaming is starting" visual state.
+    ///
+    /// This method stamps each orphan with an honest interruption
+    /// reason — the user then sees a clear "stream interrupted" footer
+    /// instead of a phantom spinner, and can click Regenerate on the
+    /// bubble to retry. Idempotent: already-interrupted messages are
+    /// skipped, so calling it twice is safe.
+    ///
+    /// Expected to run from `ChatView.task(id:)` when the conversation
+    /// is first mounted, not during an active streaming session — if
+    /// `isStreaming` is true we skip the sweep entirely because the
+    /// currently-in-flight assistant placeholder is legitimately empty.
+    func reconcileInterruptedMessages(in conversation: Conversation) {
+        guard !isStreaming else { return }
+
+        var changed = false
+        for message in conversation.messages
+        where message.role == .assistant
+            && message.content.isEmpty
+            && message.interruptionReason == nil {
+            message.interruptionReason =
+                "Stream interrupted — the app was closed or the server disconnected before any tokens arrived."
+            changed = true
+        }
+        if changed {
+            try? modelContext.save()
+        }
+    }
+
     // MARK: - Core generation loop
 
     private func generate(triggerText: String,

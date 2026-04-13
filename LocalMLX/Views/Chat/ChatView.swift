@@ -59,6 +59,11 @@ struct ChatView: View {
                     modelContext: modelContext
                 )
             }
+            // Clean up any assistant placeholders left stuck in the
+            // pre-streaming state by a previous session (app quit
+            // mid-stream, server disconnect, etc.). Idempotent — safe
+            // to call every time the conversation mounts.
+            viewModel?.reconcileInterruptedMessages(in: conversation)
             // If the conversation has no model yet, try to pick one from the
             // shared (already-polling) ModelsViewModel.
             if conversation.modelId == nil, let first = modelsVM.models.first {
