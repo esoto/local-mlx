@@ -1,8 +1,9 @@
 import Foundation
 import AppKit
 
-/// Writes an executable `.command` file that starts `mlx_lm.server` with a
-/// user-chosen model and opens it in Terminal. This is a deliberate
+/// Writes an executable `.command` file that starts `mlx_lm.server`
+/// (or `mlx_vlm.server` for vision models) with a user-chosen model
+/// and opens it in Terminal. This is a deliberate
 /// workaround for the macOS app sandbox: we never call `Process.run`
 /// ourselves (which would require relaxing the sandbox); instead, we hand
 /// a script to the OS via `NSWorkspace.open`, which routes it to Terminal
@@ -18,7 +19,8 @@ import AppKit
 enum ServerLauncher {
 
     struct Config: Equatable {
-        /// Model identifier or on-disk path accepted by `mlx_lm.server --model`.
+        /// Model identifier or on-disk path accepted by the selected
+        /// server module.
         var modelPath: String
         /// Optional Python virtualenv to `source` before running the server.
         /// Pass an empty string to skip and use whatever is on the user's PATH.
@@ -29,6 +31,10 @@ enum ServerLauncher {
         /// When `true`, the rendered script detaches the server and exits
         /// quickly so the Terminal window can close without killing it.
         var background: Bool = false
+        /// When `true`, the script launches `mlx_vlm.server` instead of
+        /// `mlx_lm.server`. Vision models require `pip install mlx-vlm`
+        /// in addition to `mlx-lm` — the install script handles both.
+        var vision: Bool = false
         /// Absolute path where the background-mode script should write its
         /// PID, and where the stop script should read it from. Ignored in
         /// foreground mode. Must be an absolute path from the un-sandboxed
@@ -36,6 +42,13 @@ enum ServerLauncher {
         var pidFilePath: String = ""
         /// Absolute path for the background-mode log file.
         var logFilePath: String = ""
+    }
+
+    /// Python module name that hosts the server for a given config.
+    /// Split out so the text/vision switch is testable without rendering
+    /// a whole script.
+    static func serverModule(for config: Config) -> String {
+        config.vision ? "mlx_vlm.server" : "mlx_lm.server"
     }
 
     // MARK: - Script rendering
@@ -62,14 +75,14 @@ enum ServerLauncher {
                 "# this Terminal window does NOT kill it.",
                 "mkdir -p \"$(dirname \(logFile))\"",
                 "mkdir -p \"$(dirname \(pidFile))\"",
-                "echo 'LocalMLX → starting mlx_lm.server in background on port \(config.port)…'",
+                "echo 'LocalMLX → starting \(serverModule(for: config)) in background on port \(config.port)…'",
             ]
             if !trimmedVenv.isEmpty {
                 let venv = shellEscape(trimmedVenv)
                 lines.append("source \(venv)/bin/activate")
             }
             lines += [
-                "nohup mlx_lm.server --model \(model) --port \(config.port) >> \(logFile) 2>&1 &",
+                "nohup \(serverModule(for: config)) --model \(model) --port \(config.port) >> \(logFile) 2>&1 &",
                 "SERVER_PID=$!",
                 "echo \"$SERVER_PID\" > \(pidFile)",
                 "echo",
@@ -83,13 +96,13 @@ enum ServerLauncher {
         } else {
             lines += [
                 "# Foreground mode: closing this Terminal window stops the server.",
-                "echo 'LocalMLX → starting mlx_lm.server on port \(config.port)…'",
+                "echo 'LocalMLX → starting \(serverModule(for: config)) on port \(config.port)…'",
             ]
             if !trimmedVenv.isEmpty {
                 let venv = shellEscape(trimmedVenv)
                 lines.append("source \(venv)/bin/activate")
             }
-            lines.append("exec mlx_lm.server --model \(model) --port \(config.port)")
+            lines.append("exec \(serverModule(for: config)) --model \(model) --port \(config.port)")
         }
         return lines.joined(separator: "\n") + "\n"
     }
@@ -132,11 +145,11 @@ enum ServerLauncher {
         # shellcheck disable=SC1091
         source "$VENV/bin/activate"
         python -m pip install --upgrade pip
-        python -m pip install mlx-lm
+        python -m pip install mlx-lm mlx-vlm
 
         echo
         echo '=============================================='
-        echo 'Done! mlx-lm is installed.'
+        echo 'Done! mlx-lm and mlx-vlm are installed.'
         echo
         echo 'Now, in LocalMLX Settings → Server:'
         echo "  1. Set  Python venv  →  $VENV"
@@ -154,9 +167,12 @@ enum ServerLauncher {
     /// PID file. Falls through quietly if no server is running.
     static func renderStopScript(pidFilePath: String) -> String {
         let pidFile = shellEscape(pidFilePath)
+        // The stop script uses `kill` by PID so it doesn't need to know
+        // which server module (mlx_lm vs mlx_vlm) was started — it just
+        // targets whatever's in the PID file.
         let lines: [String] = [
             "#!/bin/bash",
-            "# Generated by LocalMLX — stops a background mlx_lm.server.",
+            "# Generated by LocalMLX — stops a background MLX server.",
             "set -eu",
             "PIDFILE=\(pidFile)",
             "if [ ! -f \"$PIDFILE\" ]; then",
@@ -167,7 +183,7 @@ enum ServerLauncher {
             "PID=$(cat \"$PIDFILE\")",
             "if kill -0 \"$PID\" 2>/dev/null; then",
             "  kill \"$PID\"",
-            "  echo \"Sent SIGTERM to mlx_lm.server (PID $PID).\"",
+            "  echo \"Sent SIGTERM to the MLX server (PID $PID).\"",
             "else",
             "  echo \"Recorded PID $PID is not running.\"",
             "fi",

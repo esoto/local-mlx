@@ -111,13 +111,53 @@ final class ServerLauncherTests: XCTestCase {
         XCTAssertTrue(script.contains("exec mlx_lm.server"))
     }
 
+    // MARK: - Vision mode
+
+    func test_serverModule_textMode_usesMlxLm() {
+        let config = ServerLauncher.Config(
+            modelPath: "m", pythonVenvPath: "", port: 8080, vision: false)
+        XCTAssertEqual(ServerLauncher.serverModule(for: config), "mlx_lm.server")
+    }
+
+    func test_serverModule_visionMode_usesMlxVlm() {
+        let config = ServerLauncher.Config(
+            modelPath: "m", pythonVenvPath: "", port: 8080, vision: true)
+        XCTAssertEqual(ServerLauncher.serverModule(for: config), "mlx_vlm.server")
+    }
+
+    func test_renderScript_visionMode_invokesMlxVlm() {
+        let config = ServerLauncher.Config(
+            modelPath: "mlx-community/Qwen2-VL-7B-Instruct-4bit",
+            pythonVenvPath: "",
+            port: 8080,
+            vision: true)
+        let script = ServerLauncher.renderScript(config)
+        XCTAssertTrue(script.contains("exec mlx_vlm.server --model 'mlx-community/Qwen2-VL-7B-Instruct-4bit' --port 8080"))
+        XCTAssertFalse(script.contains("mlx_lm.server"),
+                       "vision mode must not fall back to mlx_lm.server")
+    }
+
+    func test_renderScript_visionBackgroundMode_nohupsMlxVlm() {
+        let config = ServerLauncher.Config(
+            modelPath: "m",
+            pythonVenvPath: "",
+            port: 8080,
+            background: true,
+            vision: true,
+            pidFilePath: "/tmp/pid",
+            logFilePath: "/tmp/log")
+        let script = ServerLauncher.renderScript(config)
+        XCTAssertTrue(script.contains("nohup mlx_vlm.server"))
+        XCTAssertFalse(script.contains("nohup mlx_lm.server"))
+    }
+
     // MARK: - Install script
 
-    func test_renderInstallScript_containsPipInstallMlxLm() {
+    func test_renderInstallScript_containsPipInstallMlxLmAndMlxVlm() {
         let script = ServerLauncher.renderInstallScript()
         XCTAssertTrue(script.hasPrefix("#!/bin/bash"))
-        XCTAssertTrue(script.contains("python -m pip install mlx-lm"),
-                      "install script must actually install mlx-lm")
+        XCTAssertTrue(script.contains("python -m pip install mlx-lm mlx-vlm"),
+                      "install script must install both text and vision packages")
         XCTAssertTrue(script.contains("python3 -m venv"),
                       "install script must provision a virtualenv")
         XCTAssertTrue(script.contains("$HOME/mlx-env"),

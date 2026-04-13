@@ -136,7 +136,12 @@ struct SettingsView: View {
                             settings.mlxModelPath = entry.id
                         } label: {
                             VStack(alignment: .leading, spacing: 1) {
-                                Text("\(entry.displayName)  •  \(formatSize(entry.approxSizeGB))")
+                                HStack {
+                                    Text("\(entry.displayName)  •  \(formatSize(entry.approxSizeGB))")
+                                    if entry.isVision {
+                                        Image(systemName: "eye")
+                                    }
+                                }
                                 Text(entry.blurb)
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
@@ -146,14 +151,15 @@ struct SettingsView: View {
                 }
             }
             Divider()
-            Button("Custom…") {
-                // No-op on purpose — user just types in the TextField below.
-            }
-            .disabled(true)
+            // Field below is the place to type a custom path; this is
+            // just a hint row in the menu so the option is discoverable.
+            Text("Or type any path in the field below ↓")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         } label: {
             if let entry = MLXModelCatalog.find(settings.mlxModelPath) {
                 Label("\(entry.displayName) • \(formatSize(entry.approxSizeGB))",
-                      systemImage: "cpu")
+                      systemImage: entry.isVision ? "eye" : "cpu")
             } else if settings.mlxModelPath.isEmpty {
                 Label("Choose a model…", systemImage: "cpu")
             } else {
@@ -198,11 +204,15 @@ struct SettingsView: View {
 
     private func launchServer() {
         let port = AppSettings.makeBaseURL().port ?? 8080
+        // Auto-pick vision mode from the catalog if the model is a
+        // known vision entry. Custom paths default to text mode.
+        let isVisionModel = MLXModelCatalog.find(settings.mlxModelPath)?.isVision ?? false
         let config = ServerLauncher.Config(
             modelPath: settings.mlxModelPath,
             pythonVenvPath: settings.pythonVenvPath,
             port: port,
-            background: settings.serverRunInBackground
+            background: settings.serverRunInBackground,
+            vision: isVisionModel
         )
         do {
             let url = try ServerLauncher.writeAndLaunch(config)

@@ -11,7 +11,8 @@ import Foundation
 /// consumer Apple-silicon machine. Sizes are approximate disk footprints.
 struct MLXModelEntry: Identifiable, Hashable, Sendable {
     /// HuggingFace repo id, also used as the stable identifier.
-    /// Passed directly to `mlx_lm.server --model`.
+    /// Passed directly to `mlx_lm.server --model` (text) or
+    /// `mlx_vlm.server --model` (vision).
     let id: String
     /// Short, human-friendly label for menus.
     let displayName: String
@@ -22,6 +23,24 @@ struct MLXModelEntry: Identifiable, Hashable, Sendable {
     /// Approximate on-disk size in gigabytes. For menu badges and
     /// "will this fit" hints — not exact.
     let approxSizeGB: Double
+    /// Whether this model understands images. Vision models require
+    /// `mlx_vlm.server` to host them; text models run on `mlx_lm.server`.
+    /// The ServerLauncher picks the right module based on this flag.
+    let isVision: Bool
+
+    init(id: String,
+         displayName: String,
+         blurb: String,
+         family: Family,
+         approxSizeGB: Double,
+         isVision: Bool = false) {
+        self.id = id
+        self.displayName = displayName
+        self.blurb = blurb
+        self.family = family
+        self.approxSizeGB = approxSizeGB
+        self.isVision = isVision
+    }
 
     enum Family: String, CaseIterable, Sendable {
         case llama = "Llama"
@@ -29,6 +48,7 @@ struct MLXModelEntry: Identifiable, Hashable, Sendable {
         case mistral = "Mistral"
         case phi = "Phi"
         case gemma = "Gemma"
+        case vision = "Vision"
     }
 }
 
@@ -106,6 +126,29 @@ enum MLXModelCatalog {
             blurb: "Higher-quality Gemma build. Needs ~7 GB free RAM.",
             family: .gemma,
             approxSizeGB: 5.4),
+
+        // MARK: Vision
+        MLXModelEntry(
+            id: "mlx-community/Qwen2-VL-7B-Instruct-4bit",
+            displayName: "Qwen 2 VL 7B Instruct",
+            blurb: "Vision + text. Strong at OCR and image Q&A.",
+            family: .vision,
+            approxSizeGB: 4.5,
+            isVision: true),
+        MLXModelEntry(
+            id: "mlx-community/llava-v1.6-mistral-7b-4bit",
+            displayName: "LLaVA 1.6 Mistral 7B",
+            blurb: "Classic multimodal model, good general image understanding.",
+            family: .vision,
+            approxSizeGB: 4.4,
+            isVision: true),
+        MLXModelEntry(
+            id: "mlx-community/Phi-3.5-vision-instruct-4bit",
+            displayName: "Phi 3.5 Vision Instruct",
+            blurb: "Small Microsoft vision model — fits on 8 GB machines.",
+            family: .vision,
+            approxSizeGB: 2.5,
+            isVision: true),
     ]
 
     /// Look up a catalog entry by its HF path. Returns nil for custom

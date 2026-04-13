@@ -70,4 +70,30 @@ final class MLXModelCatalogTests: XCTestCase {
             XCTAssertGreaterThan(group.entries.count, 0)
         }
     }
+
+    func test_builtIn_hasAtLeastOneVisionModel() {
+        let vision = MLXModelCatalog.builtIn.filter(\.isVision)
+        XCTAssertFalse(vision.isEmpty,
+                       "catalog should include at least one vision model")
+    }
+
+    func test_visionFlag_alignsWithFamily() {
+        // Every vision-family entry should be flagged, and vice versa.
+        for entry in MLXModelCatalog.builtIn {
+            XCTAssertEqual(entry.isVision, entry.family == .vision,
+                           "\(entry.id) vision flag does not match family")
+        }
+    }
+
+    func test_defaultInit_isNotVision() {
+        // isVision defaults to false so existing text entries don't
+        // need to be touched.
+        let entry = MLXModelEntry(
+            id: "mlx-community/whatever",
+            displayName: "Whatever",
+            blurb: "",
+            family: .llama,
+            approxSizeGB: 1.0)
+        XCTAssertFalse(entry.isVision)
+    }
 }
