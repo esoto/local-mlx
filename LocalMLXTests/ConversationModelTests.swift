@@ -6,7 +6,7 @@ import SwiftData
 final class ConversationModelTests: XCTestCase {
 
     private func makeContainer() throws -> ModelContainer {
-        let schema = Schema([Conversation.self, Message.self])
+        let schema = Schema([Conversation.self, Message.self, MessageAttachment.self])
         let config = ModelConfiguration(isStoredInMemoryOnly: true)
         return try ModelContainer(for: schema, configurations: [config])
     }
@@ -104,6 +104,80 @@ final class ConversationModelTests: XCTestCase {
             predicate: #Predicate { $0.isArchived })
         let archivedResults = try ctx.fetch(archivedDescriptor)
         XCTAssertEqual(archivedResults.map(\.title), ["Old"])
+    }
+
+    func test_attachment_roundTripsThroughPersistence() throws {
+        let container = try makeContainer()
+        let ctx = container.mainContext
+
+        let convo = Conversation(title: "With image")
+        ctx.insert(convo)
+
+        let msg = Message(role: .user, content: "what is in this?", conversation: convo)
+        ctx.insert(msg)
+
+        let bytes = Data([0x89, 0x50, 0x4E, 0x47])  // PNG magic
+        let attachment = MessageAttachment(
+            mimeType: "image/png",
+            data: bytes,
+            width: 32,
+            height: 32,
+            message: msg)
+        ctx.insert(attachment)
+
+        try ctx.save()
+
+        let fetched = try ctx.fetch(FetchDescriptor<Message>()).first
+        XCTAssertEqual(fetched?.attachments.count, 1)
+        XCTAssertEqual(fetched?.attachments.first?.mimeType, "image/png")
+        XCTAssertEqual(fetched?.attachments.first?.data, bytes)
+        XCTAssertEqual(fetched?.attachments.first?.width, 32)
+    }
+
+    func test_attachment_cascadeDeletesWithMessage() throws {
+        let container = try makeContainer()
+        let ctx = container.mainContext
+
+        let convo = Conversation(title: "Cascade")
+        ctx.insert(convo)
+
+        let msg = Message(role: .user, content: "hi", conversation: convo)
+        ctx.insert(msg)
+
+        let attachment = MessageAttachment(
+            mimeType: "image/png",
+            data: Data([0x01]),
+            message: msg)
+        ctx.insert(attachment)
+        try ctx.save()
+
+        ctx.delete(msg)
+        try ctx.save()
+
+        let remaining = try ctx.fetch(FetchDescriptor<MessageAttachment>())
+        XCTAssertEqual(remaining.count, 0,
+                       "deleting a message should cascade to its attachments")
+    }
+
+    func test_attachment_cascadeDeletesWhenConversationIsDeleted() throws {
+        let container = try makeContainer()
+        let ctx = container.mainContext
+
+        let convo = Conversation(title: "Deep cascade")
+        ctx.insert(convo)
+        let msg = Message(role: .user, content: "hi", conversation: convo)
+        ctx.insert(msg)
+        ctx.insert(MessageAttachment(
+            mimeType: "image/jpeg",
+            data: Data([0x02]),
+            message: msg))
+        try ctx.save()
+
+        ctx.delete(convo)
+        try ctx.save()
+
+        XCTAssertEqual(try ctx.fetch(FetchDescriptor<Message>()).count, 0)
+        XCTAssertEqual(try ctx.fetch(FetchDescriptor<MessageAttachment>()).count, 0)
     }
 
     func test_toggleArchiveFlag_movesBetweenQueries() throws {

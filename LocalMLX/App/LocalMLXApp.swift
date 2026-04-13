@@ -19,7 +19,7 @@ struct LocalMLXApp: App {
     private var modelsVM: ModelsViewModel { Self.sharedModelsVM }
 
     private let modelContainer: ModelContainer = {
-        let schema = Schema([Conversation.self, Message.self])
+        let schema = Schema([Conversation.self, Message.self, MessageAttachment.self])
         do {
             return try ModelContainer(
                 for: schema,

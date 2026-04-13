@@ -16,6 +16,14 @@ final class Message: Identifiable {
     var createdAt: Date
     var conversation: Conversation?
 
+    /// Inline image attachments for multimodal messages. Cascading
+    /// delete keeps things tidy: when the message is removed, its
+    /// image blobs go with it. Lightweight-migrates from stores that
+    /// predate the attachments model because the relationship
+    /// defaults to an empty array.
+    @Relationship(deleteRule: .cascade, inverse: \MessageAttachment.message)
+    var attachments: [MessageAttachment] = []
+
     /// Computed tokens/sec for this assistant reply (from elapsed time and
     /// either server-reported `completion_tokens` or the delta count).
     /// nil for user messages and messages generated before tok/s tracking.

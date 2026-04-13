@@ -12,6 +12,7 @@ struct ChatView: View {
 
     @State private var viewModel: ChatViewModel?
     @State private var draft: String = ""
+    @State private var draftAttachments: [ChatViewModel.PendingAttachment] = []
     @State private var editingMessage: Message?
     @State private var showingExporter = false
     @State private var exportDocument: MarkdownDocument?
@@ -41,9 +42,9 @@ struct ChatView: View {
             Divider()
             ComposerView(
                 text: $draft,
+                attachments: $draftAttachments,
                 isStreaming: viewModel?.isStreaming ?? false,
-                canSend: !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    && !(conversation.modelId ?? "").isEmpty,
+                canSend: canSendDraft,
                 onSend: send,
                 onStop: stop
             )
@@ -120,10 +121,21 @@ struct ChatView: View {
 
     // MARK: - Actions
 
+    private var canSendDraft: Bool {
+        let hasText = !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasAttachments = !draftAttachments.isEmpty
+        let hasModel = !(conversation.modelId ?? "").isEmpty
+        return (hasText || hasAttachments) && hasModel
+    }
+
     private func send() {
         let text = draft
+        let attachments = draftAttachments
         draft = ""
-        Task { await viewModel?.send(text, in: conversation) }
+        draftAttachments = []
+        Task {
+            await viewModel?.send(text, attachments: attachments, in: conversation)
+        }
     }
 
     private func stop() {

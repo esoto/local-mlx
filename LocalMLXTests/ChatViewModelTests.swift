@@ -86,7 +86,7 @@ final class ChatViewModelTests: XCTestCase {
     }
 
     private func makeContainer() throws -> ModelContainer {
-        let schema = Schema([Conversation.self, Message.self])
+        let schema = Schema([Conversation.self, Message.self, MessageAttachment.self])
         let config = ModelConfiguration(isStoredInMemoryOnly: true)
         let container = try ModelContainer(for: schema, configurations: [config])
         retainedContainers.append(container)
@@ -443,6 +443,54 @@ final class ChatViewModelTests: XCTestCase {
 
         let fork = vm.branch(atMessage: pivot, from: convo)
         XCTAssertEqual(fork?.title, "My chat (fork)")
+    }
+
+    // MARK: - Attachments
+
+    func test_send_withAttachments_persistsBlobsOnUserMessage() async throws {
+        let (vm, _, _, convo) = try makeFixtures()
+
+        let png = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
+        let pending = ChatViewModel.PendingAttachment(
+            data: png,
+            mimeType: "image/png",
+            width: 64,
+            height: 48)
+
+        await vm.send("what's in this?", attachments: [pending], in: convo)
+
+        let ordered = convo.sortedMessages
+        XCTAssertEqual(ordered.count, 2)
+        let user = ordered[0]
+        XCTAssertEqual(user.role, .user)
+        XCTAssertEqual(user.content, "what's in this?")
+        XCTAssertEqual(user.attachments.count, 1)
+
+        let persisted = user.attachments.first
+        XCTAssertEqual(persisted?.mimeType, "image/png")
+        XCTAssertEqual(persisted?.data, png)
+        XCTAssertEqual(persisted?.width, 64)
+        XCTAssertEqual(persisted?.height, 48)
+    }
+
+    func test_send_withOnlyAttachmentsNoText_stillSends() async throws {
+        let (vm, _, _, convo) = try makeFixtures()
+
+        let pending = ChatViewModel.PendingAttachment(
+            data: Data([0xFF, 0xD8]),
+            mimeType: "image/jpeg")
+
+        await vm.send("", attachments: [pending], in: convo)
+
+        XCTAssertEqual(convo.sortedMessages.count, 2,
+                       "an image-only send should still create a user message")
+        XCTAssertEqual(convo.sortedMessages.first?.attachments.count, 1)
+    }
+
+    func test_send_emptyTextAndEmptyAttachments_isNoOp() async throws {
+        let (vm, _, _, convo) = try makeFixtures()
+        await vm.send("", in: convo)
+        XCTAssertEqual(convo.messages.count, 0)
     }
 
     func test_branch_returnsNil_whenPivotNotFoundInConversation() throws {

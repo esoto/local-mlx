@@ -40,12 +40,19 @@ final class ChatViewModel {
     // MARK: - Public API
 
     /// Send a user message to the given conversation and stream the assistant
-    /// reply.
-    func send(_ text: String, in conversation: Conversation) async {
+    /// reply. Optional `attachments` are image blobs (with MIME types)
+    /// that will be persisted alongside the user message and forwarded
+    /// to vision-capable servers as content parts. An empty text + empty
+    /// attachments is a no-op; a message with at least one attachment is
+    /// allowed even with empty text, so a user can drop an image and just
+    /// hit Send.
+    func send(_ text: String,
+              attachments: [PendingAttachment] = [],
+              in conversation: Conversation) async {
         streamingTask?.cancel()
 
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        guard !trimmed.isEmpty || !attachments.isEmpty else { return }
 
         errorBanner = nil
 
@@ -60,7 +67,36 @@ final class ChatViewModel {
             conversation: conversation)
         modelContext.insert(userMsg)
 
+        for pending in attachments {
+            let attachment = MessageAttachment(
+                createdAt: sendTime,
+                mimeType: pending.mimeType,
+                data: pending.data,
+                width: pending.width,
+                height: pending.height,
+                message: userMsg)
+            modelContext.insert(attachment)
+        }
+
         await generate(triggerText: trimmed, in: conversation, placeholderAfter: sendTime)
+    }
+
+    /// Lightweight value type used to ferry a pending image attachment
+    /// from the composer into `send`. Kept separate from the SwiftData
+    /// `MessageAttachment` model so the composer doesn't have to touch
+    /// the ModelContext directly.
+    struct PendingAttachment: Equatable, Sendable {
+        let data: Data
+        let mimeType: String
+        let width: Int?
+        let height: Int?
+
+        init(data: Data, mimeType: String, width: Int? = nil, height: Int? = nil) {
+            self.data = data
+            self.mimeType = mimeType
+            self.width = width
+            self.height = height
+        }
     }
 
     /// Regenerate the reply for a specific assistant message. The assistant
@@ -241,13 +277,19 @@ final class ChatViewModel {
         modelContext.insert(assistantMsg)
 
         // Build the OpenAI request from the full (persisted) conversation.
-        // Attachments are carried through as ChatHistoryEntry so that the
-        // builder can emit content parts for messages with images.
-        // (Image attachments are plumbed through in a follow-up commit.)
+        // Attachments on a user message are surfaced to the builder so
+        // multimodal servers see them as content parts.
         let history = conversation.sortedMessages
             .filter { !($0.role == .assistant && $0.content.isEmpty) }
             .map { msg in
-                ChatHistoryEntry(role: msg.role.rawValue, text: msg.content)
+                ChatHistoryEntry(
+                    role: msg.role.rawValue,
+                    text: msg.content,
+                    attachments: msg.attachments
+                        .sorted { $0.createdAt < $1.createdAt }
+                        .map { ChatHistoryEntry.Attachment(data: $0.data,
+                                                           mimeType: $0.mimeType) }
+                )
             }
 
         let request = ChatRequest(

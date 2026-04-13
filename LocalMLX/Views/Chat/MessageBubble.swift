@@ -14,6 +14,9 @@ struct MessageBubble: View {
             icon
             VStack(alignment: .leading, spacing: 4) {
                 roleLabel
+                if !message.attachments.isEmpty {
+                    attachmentRow
+                }
                 body(for: message)
                 footer
             }
@@ -181,4 +184,86 @@ struct MessageBubble: View {
     }
 
     private var isUser: Bool { message.role == .user }
+
+    // MARK: - Attachments
+
+    @ViewBuilder
+    private var attachmentRow: some View {
+        let sorted = message.attachments.sorted { $0.createdAt < $1.createdAt }
+        HStack(spacing: 6) {
+            ForEach(sorted) { attachment in
+                InlineAttachmentThumbnail(attachment: attachment)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+}
+
+private struct InlineAttachmentThumbnail: View {
+    let attachment: MessageAttachment
+    @State private var hovered = false
+
+    var body: some View {
+        Group {
+            if let image = NSImage(data: attachment.data) {
+                Image(nsImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 128, height: 96)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(Color.secondary.opacity(0.25), lineWidth: 0.5)
+                    )
+                    .overlay(alignment: .topTrailing) {
+                        if hovered {
+                            Button {
+                                openInPreview(attachment: attachment)
+                            } label: {
+                                Image(systemName: "arrow.up.left.and.arrow.down.right")
+                                    .padding(4)
+                                    .background(.black.opacity(0.6), in: Circle())
+                                    .foregroundStyle(.white)
+                            }
+                            .buttonStyle(.plain)
+                            .padding(4)
+                            .help("Open full size in Preview")
+                        }
+                    }
+            } else {
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color.secondary.opacity(0.2))
+                    .frame(width: 128, height: 96)
+                    .overlay(Image(systemName: "photo"))
+            }
+        }
+        .onHover { hovered = $0 }
+    }
+
+    /// Write the image bytes to a temp file and hand them to the OS so
+    /// Preview (or whatever the user has associated with images) opens
+    /// them. Safe from the sandbox because we're only asking
+    /// LaunchServices to open a file inside our container.
+    private func openInPreview(attachment: MessageAttachment) {
+        let ext = mimeToExtension(attachment.mimeType)
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LocalMLX-\(attachment.id.uuidString).\(ext)")
+        do {
+            try attachment.data.write(to: url, options: .atomic)
+            NSWorkspace.shared.open(url)
+        } catch {
+            NSLog("LocalMLX: could not open attachment: \(error)")
+        }
+    }
+
+    private func mimeToExtension(_ mime: String) -> String {
+        switch mime {
+        case "image/jpeg": return "jpg"
+        case "image/png":  return "png"
+        case "image/gif":  return "gif"
+        case "image/webp": return "webp"
+        case "image/heic": return "heic"
+        default: return "png"
+        }
+    }
 }
