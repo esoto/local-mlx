@@ -111,6 +111,35 @@ final class ServerLauncherTests: XCTestCase {
         XCTAssertTrue(script.contains("exec mlx_lm.server"))
     }
 
+    // MARK: - Install script
+
+    func test_renderInstallScript_containsPipInstallMlxLm() {
+        let script = ServerLauncher.renderInstallScript()
+        XCTAssertTrue(script.hasPrefix("#!/bin/bash"))
+        XCTAssertTrue(script.contains("python -m pip install mlx-lm"),
+                      "install script must actually install mlx-lm")
+        XCTAssertTrue(script.contains("python3 -m venv"),
+                      "install script must provision a virtualenv")
+        XCTAssertTrue(script.contains("$HOME/mlx-env"),
+                      "default venv target should be ~/mlx-env")
+    }
+
+    func test_renderInstallScript_checksForPython3Before() {
+        let script = ServerLauncher.renderInstallScript()
+        let pythonCheck = script.range(of: "command -v python3")!
+        let pipInstall = script.range(of: "pip install mlx-lm")!
+        XCTAssertLessThan(pythonCheck.lowerBound, pipInstall.lowerBound,
+                          "must verify Python is present before trying to install")
+    }
+
+    func test_renderInstallScript_customVenvPath_isSubstituted() {
+        let script = ServerLauncher.renderInstallScript(venvPath: "/opt/localmlx-env")
+        XCTAssertTrue(script.contains("'/opt/localmlx-env'"),
+                      "custom venv path should be shell-escaped into the script")
+        XCTAssertFalse(script.contains("$HOME/mlx-env"),
+                       "default path should not leak in when a custom one is given")
+    }
+
     // MARK: - Stop script
 
     func test_renderStopScript_killsRecordedPIDAndRemovesFile() {

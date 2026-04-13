@@ -52,6 +52,8 @@ struct SettingsView: View {
                     Button("Stop Server") { stopServer() }
                         .disabled(!settings.serverRunInBackground)
                         .help("Only available in background mode. Foreground servers are stopped by closing their Terminal window.")
+                    Button("Install MLX…") { installMLX() }
+                        .help("First-time setup: creates a Python virtualenv at ~/mlx-env and installs mlx-lm inside it. Opens in Terminal so you can watch the install.")
                     launchStatusView
                 }
 
@@ -161,6 +163,15 @@ struct SettingsView: View {
         do {
             _ = try ServerLauncher.writeAndLaunchStop()
             launchState = .launched("Stop script opened in Terminal")
+        } catch {
+            launchState = .failed(error.localizedDescription)
+        }
+    }
+
+    private func installMLX() {
+        do {
+            let url = try ServerLauncher.writeAndLaunchInstall()
+            launchState = .launched(url.path)
         } catch {
             launchState = .failed(error.localizedDescription)
         }

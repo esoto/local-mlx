@@ -334,7 +334,7 @@ final class ChatViewModelTests: XCTestCase {
 
     // MARK: - branch
 
-    func test_branch_createsNewConversationWithMessagesUpToAndIncludingPivot() async throws {
+    func test_branch_createsNewConversationWithMessagesFromPivotOnward() async throws {
         let (vm, client, container, convo) = try makeFixtures()
         let ctx = container.mainContext
 
@@ -353,20 +353,60 @@ final class ChatViewModelTests: XCTestCase {
         // Source conversation untouched.
         XCTAssertEqual(convo.messages.count, 4)
 
-        // Fork has exactly the first two messages, copied by value.
+        // Fork contains the pivot + everything after: [asst1, user2, asst2]
+        // so the user can continue the later slice of the transcript.
         XCTAssertNotNil(fork)
-        XCTAssertEqual(fork?.messages.count, 2)
+        XCTAssertEqual(fork?.messages.count, 3)
         let forkMsgs = fork?.sortedMessages ?? []
-        XCTAssertEqual(forkMsgs.map(\.role), [.user, .assistant])
-        XCTAssertEqual(forkMsgs.map(\.content), ["question 1", "reply1"])
+        XCTAssertEqual(forkMsgs.map(\.role), [.assistant, .user, .assistant])
+        XCTAssertEqual(forkMsgs.map(\.content), ["reply1", "question 2", "reply2"])
 
-        // The fork's messages are independent instances.
-        XCTAssertFalse(forkMsgs.contains(where: { $0 === sorted[0] }))
+        // The fork's messages are independent instances — modifying the
+        // fork must not mutate the source.
         XCTAssertFalse(forkMsgs.contains(where: { $0 === sorted[1] }))
+        XCTAssertFalse(forkMsgs.contains(where: { $0 === sorted[2] }))
+        XCTAssertFalse(forkMsgs.contains(where: { $0 === sorted[3] }))
 
         // The fork was inserted into the same context as the source.
         let allConvos = try ctx.fetch(FetchDescriptor<Conversation>())
         XCTAssertEqual(allConvos.count, 2)
+    }
+
+    func test_branch_pivotAtFirstMessage_yieldsFullCopy() async throws {
+        let (vm, client, _, convo) = try makeFixtures()
+
+        client.behavior = .deltas(["a"], perTokenDelay: 0)
+        await vm.send("q1", in: convo)
+        client.behavior = .deltas(["b"], perTokenDelay: 0)
+        await vm.send("q2", in: convo)
+
+        // Picking the first message as the pivot means the fork should
+        // contain every message — it's equivalent to "copy the whole
+        // conversation".
+        let pivot = convo.sortedMessages.first!
+        let fork = vm.branch(atMessage: pivot, from: convo)
+
+        XCTAssertEqual(fork?.messages.count, 4)
+        XCTAssertEqual(fork?.sortedMessages.map(\.content),
+                       ["q1", "a", "q2", "b"])
+    }
+
+    func test_branch_pivotAtLastMessage_yieldsSingleMessageFork() async throws {
+        let (vm, client, _, convo) = try makeFixtures()
+
+        client.behavior = .deltas(["a"], perTokenDelay: 0)
+        await vm.send("q1", in: convo)
+        client.behavior = .deltas(["b"], perTokenDelay: 0)
+        await vm.send("q2", in: convo)
+
+        // Picking the last message as the pivot should yield a fork with
+        // exactly one message — useful for "take just this reply into a
+        // new chat and continue from there".
+        let pivot = convo.sortedMessages.last!
+        let fork = vm.branch(atMessage: pivot, from: convo)
+
+        XCTAssertEqual(fork?.messages.count, 1)
+        XCTAssertEqual(fork?.sortedMessages.map(\.content), ["b"])
     }
 
     func test_branch_copiesConversationSettings() async throws {

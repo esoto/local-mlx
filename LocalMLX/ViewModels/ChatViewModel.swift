@@ -143,12 +143,15 @@ final class ChatViewModel {
     }
 
     /// Fork the conversation at a specific message. Returns a new
-    /// `Conversation` inserted into the same `ModelContext` with
-    /// independent copies of all messages up to AND including `message`.
+    /// `Conversation` inserted into the same `ModelContext` containing
+    /// independent copies of `message` and every message that follows it
+    /// in the source conversation. The history BEFORE `message` is
+    /// dropped — the pivot becomes the first message of the fork, so
+    /// continuing the fork extends that slice of the transcript.
     /// Returns nil if the pivot message does not belong to `source`.
     ///
     /// The fork preserves the original `createdAt` timestamps on the
-    /// copied messages so the transcript reads as a natural branch.
+    /// copied messages so the transcript reads as a natural continuation.
     @discardableResult
     func branch(atMessage message: Message,
                 from source: Conversation) -> Conversation? {
@@ -156,7 +159,7 @@ final class ChatViewModel {
         guard let pivotIdx = sorted.firstIndex(where: { $0 === message }) else {
             return nil
         }
-        let kept = sorted.prefix(through: pivotIdx)
+        let kept = sorted.suffix(from: pivotIdx)
 
         let fork = Conversation(
             title: Self.forkTitle(from: source.title),
