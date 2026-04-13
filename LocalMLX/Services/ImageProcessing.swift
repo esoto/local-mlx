@@ -1,6 +1,7 @@
 import Foundation
-import AppKit
+import ImageIO
 import CoreGraphics
+import UniformTypeIdentifiers
 
 /// Downscales and re-encodes pasted/dropped/attached images before they
 /// get stored on a `Message` and later base64-encoded into a request
@@ -10,19 +11,25 @@ import CoreGraphics
 /// ~5.3 MB after base64), which wastes wire time and RAM on every
 /// request.
 ///
-/// Kept as a pure value-in/value-out helper so tests can assert on
-/// real image bytes without spinning up any SwiftUI or NSViewController.
+/// Built on `CGImageSource` / `CGContext` / `CGImageDestination` so
+/// every path is safe to call from a background thread. The earlier
+/// version used `NSImage.lockFocus()` which requires an AppKit
+/// main-thread context — fine when called from a SwiftUI view body,
+/// broken the moment we moved drop processing into a
+/// `Task.detached`, because `lockFocus` silently returned a blank
+/// image off the main thread and the whole attachment pipeline
+/// looked like it was dropping images on the floor.
 enum ImageProcessing {
 
     /// Longest-edge cap in pixels. Anything wider or taller gets
     /// proportionally downscaled until it fits. Anything already below
     /// the cap is passed through without resampling.
-    static let maxDimension: CGFloat = 2048
+    static let maxDimension: Int = 2048
 
     /// JPEG quality for the re-encoded output. 0.85 balances visible
     /// quality with size — higher values produce diminishing returns
     /// for the kind of images a chat user typically drops.
-    static let jpegQuality: CGFloat = 0.85
+    static let jpegQuality: Double = 0.85
 
     /// Result of processing an attachment.
     struct Processed: Equatable {
@@ -38,67 +45,99 @@ enum ImageProcessing {
     /// proportionally and re-encode as JPEG at `jpegQuality`.
     /// Returns `nil` if the input isn't a recognisable image.
     static func process(_ input: Data, originalMimeType: String) -> Processed? {
-        guard let image = NSImage(data: input) else { return nil }
+        guard let source = CGImageSourceCreateWithData(input as CFData, nil) else {
+            return nil
+        }
+        guard let (originalWidth, originalHeight) = pixelSize(of: source) else {
+            return nil
+        }
 
-        let originalSize = image.size
-        guard originalSize.width > 0, originalSize.height > 0 else { return nil }
-
-        // Under the cap: pass through. This keeps small images
-        // byte-for-byte identical instead of round-tripping them
-        // through JPEG and introducing compression artefacts for no
-        // reason.
-        if originalSize.width <= maxDimension && originalSize.height <= maxDimension {
+        // Under the cap on both sides: pass through untouched. Keeps
+        // small PNGs byte-for-byte identical instead of round-tripping
+        // through JPEG and introducing artefacts for no reason.
+        if originalWidth <= maxDimension && originalHeight <= maxDimension {
             return Processed(
                 data: input,
                 mimeType: originalMimeType,
-                width: Int(originalSize.width),
-                height: Int(originalSize.height)
-            )
+                width: originalWidth,
+                height: originalHeight)
         }
 
         // Over the cap: compute the target size preserving aspect ratio
-        // then resample through CGContext.
-        let scale = maxDimension / max(originalSize.width, originalSize.height)
-        let targetWidth = Int((originalSize.width * scale).rounded())
-        let targetHeight = Int((originalSize.height * scale).rounded())
+        // then resample through a CGContext. All CG APIs here are
+        // thread-safe, unlike NSImage.lockFocus.
+        let scale = Double(maxDimension) / Double(max(originalWidth, originalHeight))
+        let targetWidth = Int((Double(originalWidth) * scale).rounded())
+        let targetHeight = Int((Double(originalHeight) * scale).rounded())
 
-        guard let resized = downscale(image, to: CGSize(width: targetWidth, height: targetHeight)),
+        guard let resized = resample(source: source,
+                                     toWidth: targetWidth,
+                                     toHeight: targetHeight),
               let jpegData = jpegEncode(resized)
-        else { return nil }
+        else {
+            return nil
+        }
 
         return Processed(
             data: jpegData,
             mimeType: "image/jpeg",
             width: targetWidth,
-            height: targetHeight
-        )
+            height: targetHeight)
     }
 
     // MARK: - Internal helpers
 
-    /// Resample an `NSImage` to the given target size using a bitmap
-    /// context. Returns nil if either the source has no usable
-    /// representation or the target context can't be created.
-    static func downscale(_ image: NSImage, to target: CGSize) -> NSImage? {
-        let result = NSImage(size: target)
-        result.lockFocus()
-        defer { result.unlockFocus() }
-        NSGraphicsContext.current?.imageInterpolation = .high
-        image.draw(
-            in: NSRect(origin: .zero, size: target),
-            from: .zero,
-            operation: .copy,
-            fraction: 1.0)
-        return result
+    /// Pull pixel dimensions out of a `CGImageSource` without fully
+    /// decoding the image. Fast and thread-safe.
+    static func pixelSize(of source: CGImageSource) -> (Int, Int)? {
+        guard let props = CGImageSourceCopyPropertiesAtIndex(
+                source, 0, nil) as? [CFString: Any],
+              let width = props[kCGImagePropertyPixelWidth] as? Int,
+              let height = props[kCGImagePropertyPixelHeight] as? Int
+        else { return nil }
+        return (width, height)
     }
 
-    /// Encode an `NSImage` as JPEG bytes at `jpegQuality`.
-    static func jpegEncode(_ image: NSImage) -> Data? {
-        guard let tiff = image.tiffRepresentation,
-              let bitmap = NSBitmapImageRep(data: tiff) else { return nil }
-        return bitmap.representation(
-            using: .jpeg,
-            properties: [.compressionFactor: jpegQuality]
-        )
+    /// Decode + resample to the target size via a fresh RGBA CGContext.
+    /// No NSImage, no AppKit event loop — safe from any queue.
+    static func resample(
+        source: CGImageSource,
+        toWidth width: Int,
+        toHeight height: Int
+    ) -> CGImage? {
+        guard let decoded = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+            return nil
+        }
+        guard let ctx = CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else {
+            return nil
+        }
+        ctx.interpolationQuality = .high
+        ctx.draw(decoded, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return ctx.makeImage()
+    }
+
+    /// Encode a `CGImage` as JPEG bytes at `jpegQuality`. Uses
+    /// `CGImageDestination` so no NSImage is required.
+    static func jpegEncode(_ image: CGImage) -> Data? {
+        let data = NSMutableData()
+        guard let dest = CGImageDestinationCreateWithData(
+            data, UTType.jpeg.identifier as CFString, 1, nil
+        ) else {
+            return nil
+        }
+        let options: [CFString: Any] = [
+            kCGImageDestinationLossyCompressionQuality: jpegQuality
+        ]
+        CGImageDestinationAddImage(dest, image, options as CFDictionary)
+        guard CGImageDestinationFinalize(dest) else { return nil }
+        return data as Data
     }
 }

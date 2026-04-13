@@ -1,35 +1,62 @@
 import XCTest
-import AppKit
+import CoreGraphics
+import ImageIO
+import UniformTypeIdentifiers
 @testable import LocalMLX
 
 final class ImageProcessingTests: XCTestCase {
 
     // MARK: - Test image generators
 
-    /// Build a PNG blob at the given size. Uses a solid colour fill
-    /// so the bytes are deterministic enough for tests.
+    /// Build a PNG blob at the exact pixel dimensions requested.
+    /// Uses `CGContext` + `CGImageDestination` rather than
+    /// `NSImage.lockFocus`, because NSImage sizes are in *points*
+    /// and on a Retina display a nominal 2048×1024 NSImage comes
+    /// out as a 4096×2048 bitmap — which breaks every passthrough
+    /// assertion. The CG path has no such ambiguity.
     private func makePNG(width: Int, height: Int) -> Data {
-        let size = NSSize(width: width, height: height)
-        let image = NSImage(size: size)
-        image.lockFocus()
-        NSColor.red.setFill()
-        NSRect(origin: .zero, size: size).fill()
-        image.unlockFocus()
-
-        guard let tiff = image.tiffRepresentation,
-              let bitmap = NSBitmapImageRep(data: tiff),
-              let png = bitmap.representation(using: .png, properties: [:])
-        else {
-            XCTFail("could not synthesize PNG at \(width)x\(height)")
+        guard let ctx = CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else {
+            XCTFail("could not create CGContext at \(width)x\(height)")
             return Data()
         }
-        return png
+        ctx.setFillColor(CGColor(red: 1, green: 0, blue: 0, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: width, height: height))
+
+        guard let cgImage = ctx.makeImage() else {
+            XCTFail("could not snapshot CGContext")
+            return Data()
+        }
+        let data = NSMutableData()
+        guard let dest = CGImageDestinationCreateWithData(
+            data, UTType.png.identifier as CFString, 1, nil
+        ) else {
+            XCTFail("could not create PNG destination")
+            return Data()
+        }
+        CGImageDestinationAddImage(dest, cgImage, nil)
+        guard CGImageDestinationFinalize(dest) else {
+            XCTFail("could not finalize PNG")
+            return Data()
+        }
+        return data as Data
     }
 
     /// Decode an arbitrary image blob back to (width, height) pixels.
+    /// Uses `CGImageSource` so the values are true pixel counts, not
+    /// points.
     private func pixelSize(of data: Data) -> (Int, Int)? {
-        guard let image = NSImage(data: data) else { return nil }
-        return (Int(image.size.width), Int(image.size.height))
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else {
+            return nil
+        }
+        return ImageProcessing.pixelSize(of: source)
     }
 
     // MARK: - Passthrough
