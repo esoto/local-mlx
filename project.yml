@@ -15,6 +15,9 @@ packages:
   MarkdownUI:
     url: https://github.com/gonzalezreal/swift-markdown-ui
     from: "2.4.0"
+  Splash:
+    url: https://github.com/JohnSundell/Splash
+    from: "0.16.0"
 targets:
   LocalMLX:
     type: application
@@ -24,6 +27,8 @@ targets:
     dependencies:
       - package: MarkdownUI
         product: MarkdownUI
+      - package: Splash
+        product: Splash
     info:
       path: LocalMLX/Info.plist
       properties:

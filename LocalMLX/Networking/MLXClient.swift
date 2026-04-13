@@ -1,23 +1,31 @@
 import Foundation
 import OSLog
 
+/// Events emitted by `MLXClient.streamChat`. Individual content tokens are
+/// `.delta`; the server's token-count summary (if available) is `.usage`,
+/// and may arrive at any point but in practice comes as the final chunk.
+enum StreamEvent: Sendable, Equatable {
+    case delta(String)
+    case usage(UsageStats)
+}
+
 /// Abstraction used by `ChatViewModel` so tests can inject a fake stream.
 protocol MLXClientProtocol: Sendable {
     /// Returns the list of model ids from `GET /v1/models`.
     func listModels() async throws -> [String]
 
-    /// Streams content deltas for a chat completion. The returned stream
-    /// terminates normally on `[DONE]`, throws `MLXClientError.canceled` on
-    /// consumer cancellation, and throws `MLXClientError.http/.unreachable`
-    /// on server / network errors.
-    func streamChat(_ request: ChatRequest) async throws -> AsyncThrowingStream<String, Error>
+    /// Streams content deltas and an optional final usage payload for a chat
+    /// completion. Terminates normally on `[DONE]`; throws
+    /// `MLXClientError.canceled` on consumer cancellation; throws
+    /// `MLXClientError.http/.unreachable` on server / network errors.
+    func streamChat(_ request: ChatRequest) async throws -> AsyncThrowingStream<StreamEvent, Error>
 }
 
 /// Production implementation that hits a live `mlx_lm.server` over HTTP.
 ///
 /// The base URL is provided as a closure so runtime edits in the Settings panel
 /// take effect on the very next request — the client itself is stateless.
-final class LiveMLXClient: MLXClientProtocol {
+final class LiveMLXClient: MLXClientProtocol, @unchecked Sendable {
     private let session: URLSession
     private let baseURL: @Sendable () -> URL
     private let log = Logger(subsystem: "dev.localmlx", category: "sse")
@@ -62,7 +70,7 @@ final class LiveMLXClient: MLXClientProtocol {
 
     // MARK: - streamChat
 
-    func streamChat(_ request: ChatRequest) async throws -> AsyncThrowingStream<String, Error> {
+    func streamChat(_ request: ChatRequest) async throws -> AsyncThrowingStream<StreamEvent, Error> {
         let url = baseURL().appendingPathComponent("v1/chat/completions")
         var urlRequest = URLRequest(url: url)
         urlRequest.httpMethod = "POST"
@@ -97,7 +105,7 @@ final class LiveMLXClient: MLXClientProtocol {
         }
 
         let logger = log
-        return AsyncThrowingStream<String, Error> { continuation in
+        return AsyncThrowingStream<StreamEvent, Error> { continuation in
             let task = Task {
                 do {
                     for try await line in bytes.lines {
@@ -113,7 +121,10 @@ final class LiveMLXClient: MLXClientProtocol {
                                 let chunk = try JSONDecoder().decode(ChatChunk.self, from: data)
                                 if let content = chunk.choices.first?.delta.content,
                                    !content.isEmpty {
-                                    continuation.yield(content)
+                                    continuation.yield(.delta(content))
+                                }
+                                if let usage = chunk.usage {
+                                    continuation.yield(.usage(usage))
                                 }
                             } catch {
                                 logger.warning("dropping malformed SSE frame: \(error.localizedDescription, privacy: .public)")

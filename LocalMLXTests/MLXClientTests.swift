@@ -20,6 +20,17 @@ final class MLXClientTests: XCTestCase {
         return LiveMLXClient(session: session, baseURL: { [baseURL] in baseURL })
     }
 
+    private func sampleRequest() -> ChatRequest {
+        ChatRequest(
+            model: "test-model",
+            messages: [ChatMessage(role: "user", content: "hi")],
+            stream: true,
+            temperature: 0.7,
+            topP: 1.0,
+            maxTokens: 128
+        )
+    }
+
     // MARK: - listModels
 
     func test_listModels_returnsIDsOn200() async throws {
@@ -83,10 +94,8 @@ final class MLXClientTests: XCTestCase {
 
     // MARK: - streamChat
 
-    func test_streamChat_yieldsDeltasFromFixture() async throws {
+    func test_streamChat_yieldsDeltaEventsFromFixture() async throws {
         let body = try TestBundle.loadFixtureString("chat_completion_stream", ext: "txt")
-
-        // Split into separate chunks to exercise multi-frame delivery.
         let frames = body
             .components(separatedBy: "\n\n")
             .filter { !$0.isEmpty }
@@ -101,21 +110,42 @@ final class MLXClientTests: XCTestCase {
         }
 
         let client = makeClient()
-        let request = ChatRequest(
-            model: "test-model",
-            messages: [ChatMessage(role: "user", content: "hi")],
-            stream: true,
-            temperature: 0.7,
-            topP: 1.0,
-            maxTokens: 128
-        )
-
         var collected: [String] = []
-        let stream = try await client.streamChat(request)
-        for try await delta in stream {
-            collected.append(delta)
+        for try await event in try await client.streamChat(sampleRequest()) {
+            if case .delta(let d) = event { collected.append(d) }
         }
         XCTAssertEqual(collected, ["Hello", ", ", "world", "!"])
+    }
+
+    func test_streamChat_emitsUsageEvent_whenServerSendsUsage() async throws {
+        // Two deltas, then a final chunk with `usage`, then [DONE].
+        let frames = [
+            "data: {\"choices\":[{\"delta\":{\"content\":\"abc\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"def\"}}]}\n\n",
+            "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":6,\"total_tokens\":11}}\n\n",
+            "data: [DONE]\n\n",
+        ]
+
+        MockURLProtocol.handler = { [baseURL] _ in
+            MockURLProtocol.sse(chunks: frames,
+                                url: baseURL.appendingPathComponent("v1/chat/completions"))
+        }
+
+        let client = makeClient()
+        var deltas: [String] = []
+        var usage: UsageStats?
+
+        for try await event in try await client.streamChat(sampleRequest()) {
+            switch event {
+            case .delta(let d): deltas.append(d)
+            case .usage(let u): usage = u
+            }
+        }
+
+        XCTAssertEqual(deltas, ["abc", "def"])
+        XCTAssertEqual(usage?.promptTokens, 5)
+        XCTAssertEqual(usage?.completionTokens, 6)
+        XCTAssertEqual(usage?.totalTokens, 11)
     }
 
     func test_streamChat_on4xx_throwsDecodedServerMessage() async throws {
@@ -131,14 +161,10 @@ final class MLXClientTests: XCTestCase {
         }
 
         let client = makeClient()
-        let request = ChatRequest(
-            model: "bogus", messages: [], stream: true,
-            temperature: 0.7, topP: 1.0, maxTokens: 128)
-
         do {
-            let stream = try await client.streamChat(request)
+            let stream = try await client.streamChat(sampleRequest())
             for try await _ in stream {
-                XCTFail("Should not yield any deltas")
+                XCTFail("Should not yield any events")
             }
             XCTFail("Expected error")
         } catch let error as MLXClientError {
@@ -153,8 +179,6 @@ final class MLXClientTests: XCTestCase {
     }
 
     func test_streamChat_cancellation_stopsMidStreamWithCancellationError() async throws {
-        // Drip-feed 10 frames with a 100ms pause between each so we have time
-        // to cancel mid-stream.
         let frames: [String] = (0..<10).map { i in
             "data: {\"choices\":[{\"delta\":{\"content\":\"tok\(i)\"}}]}\n\n"
         }
@@ -167,42 +191,25 @@ final class MLXClientTests: XCTestCase {
         }
 
         let client = makeClient()
-        let request = ChatRequest(
-            model: "test-model",
-            messages: [ChatMessage(role: "user", content: "hi")],
-            stream: true,
-            temperature: 0.7, topP: 1.0, maxTokens: 128)
-
         var partial: [String] = []
-        var didCancel = false
 
         let task = Task {
             do {
-                let stream = try await client.streamChat(request)
-                for try await delta in stream {
-                    partial.append(delta)
-                    if partial.count == 2 {
-                        break   // bail early — simulates the Stop button
-                    }
+                let stream = try await client.streamChat(sampleRequest())
+                for try await event in stream {
+                    if case .delta(let d) = event { partial.append(d) }
+                    if partial.count == 2 { break }
                 }
-            } catch is CancellationError {
-                didCancel = true
             } catch {
-                // URLSession cancellation may surface as URLError.cancelled;
-                // treat that as equivalent for this test.
-                if let urlErr = error as? URLError, urlErr.code == .cancelled {
-                    didCancel = true
-                } else {
-                    XCTFail("Unexpected error: \(error)")
-                }
+                if let urlErr = error as? URLError, urlErr.code == .cancelled { return }
+                if error is CancellationError { return }
+                if case MLXClientError.canceled = error { return }
+                XCTFail("Unexpected error: \(error)")
             }
         }
 
         await task.value
-        // Either we broke out cleanly with 2 deltas collected, or cancellation
-        // fired. Both satisfy "stopped cleanly mid-stream".
         XCTAssertLessThanOrEqual(partial.count, 3)
         XCTAssertGreaterThanOrEqual(partial.count, 1)
-        _ = didCancel // not strictly required if we used `break`
     }
 }

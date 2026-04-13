@@ -3,14 +3,22 @@ import SwiftUI
 struct TranscriptView: View {
     let messages: [Message]
     let isStreaming: Bool
+    var onRegenerate: ((Message) -> Void)?
+    var onEdit: ((Message) -> Void)?
+    var onDelete: ((Message) -> Void)?
 
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
                     ForEach(messages, id: \.id) { message in
-                        MessageBubble(message: message)
-                            .id(message.id)
+                        MessageBubble(
+                            message: message,
+                            onRegenerate: onRegenerate.map { cb in { cb(message) } },
+                            onEdit: onEdit.map { cb in { cb(message) } },
+                            onDelete: onDelete.map { cb in { cb(message) } }
+                        )
+                        .id(message.id)
                     }
                     // Invisible anchor to pin the scroll view to the bottom.
                     Color.clear

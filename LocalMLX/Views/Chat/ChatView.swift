@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import UniformTypeIdentifiers
 
 struct ChatView: View {
     @Bindable var conversation: Conversation
@@ -11,12 +12,17 @@ struct ChatView: View {
     @State private var viewModel: ChatViewModel?
     @State private var modelsVM: ModelsViewModel?
     @State private var draft: String = ""
+    @State private var editingMessage: Message?
+    @State private var showingEditSheet = false
+    @State private var showingExporter = false
+    @State private var exportDocument: MarkdownDocument?
 
     var body: some View {
         VStack(spacing: 0) {
             ChatHeaderView(
                 conversation: conversation,
-                modelsVM: modelsVM
+                modelsVM: modelsVM,
+                onExport: prepareExport
             )
             Divider()
 
@@ -26,13 +32,12 @@ struct ChatView: View {
                     onDismiss: { viewModel?.dismissError() },
                     onRetry: {
                         viewModel?.dismissError()
-                        Task { await viewModel?.regenerateLast(in: conversation) }
+                        Task { await viewModel?.retryLast(in: conversation) }
                     }
                 )
             }
 
-            TranscriptView(messages: conversation.sortedMessages,
-                           isStreaming: viewModel?.isStreaming ?? false)
+            content
 
             Divider()
             ComposerView(
@@ -45,7 +50,6 @@ struct ChatView: View {
             )
         }
         .task(id: conversation.id) {
-            // Build view models once per conversation.
             if viewModel == nil {
                 viewModel = ChatViewModel(
                     client: clientHolder.client,
@@ -56,14 +60,70 @@ struct ChatView: View {
                 modelsVM = ModelsViewModel(client: clientHolder.client)
                 await modelsVM?.refresh()
             }
-            // If the conversation has no model yet, try to pick one.
             if conversation.modelId == nil,
                let first = modelsVM?.models.first {
                 conversation.modelId = first
                 try? modelContext.save()
             }
         }
+        .sheet(isPresented: $showingEditSheet) {
+            if let message = editingMessage {
+                EditMessageSheet(
+                    originalText: message.content,
+                    onCommit: { newText in
+                        let target = message
+                        showingEditSheet = false
+                        editingMessage = nil
+                        Task {
+                            await viewModel?.editAndResend(
+                                userMessage: target,
+                                newContent: newText,
+                                in: conversation)
+                        }
+                    },
+                    onCancel: {
+                        showingEditSheet = false
+                        editingMessage = nil
+                    }
+                )
+            }
+        }
+        .fileExporter(
+            isPresented: $showingExporter,
+            document: exportDocument,
+            contentType: .plainText,
+            defaultFilename: exportDocument?.suggestedFilename ?? "chat.md"
+        ) { _ in }
     }
+
+    // MARK: - Content area
+
+    @ViewBuilder
+    private var content: some View {
+        if conversation.messages.isEmpty {
+            EmptyChatView(
+                modelId: conversation.modelId,
+                onExampleTap: { draft = $0 }
+            )
+        } else {
+            TranscriptView(
+                messages: conversation.sortedMessages,
+                isStreaming: viewModel?.isStreaming ?? false,
+                onRegenerate: { msg in
+                    Task { await viewModel?.regenerate(assistantMessage: msg, in: conversation) }
+                },
+                onEdit: { msg in
+                    editingMessage = msg
+                    showingEditSheet = true
+                },
+                onDelete: { msg in
+                    viewModel?.delete(message: msg, in: conversation)
+                }
+            )
+        }
+    }
+
+    // MARK: - Actions
 
     private func send() {
         let text = draft
@@ -73,6 +133,15 @@ struct ChatView: View {
 
     private func stop() {
         viewModel?.stop()
+    }
+
+    private func prepareExport() {
+        let markdown = ChatExporter.markdown(from: conversation)
+        exportDocument = MarkdownDocument(
+            text: markdown,
+            suggestedFilename: ChatExporter.suggestedFilename(for: conversation)
+        )
+        showingExporter = true
     }
 }
 
@@ -103,5 +172,70 @@ private struct ErrorBanner: View {
         .background(Color.red.opacity(0.08))
         .overlay(Rectangle().fill(Color.red.opacity(0.25)).frame(height: 1),
                  alignment: .bottom)
+    }
+}
+
+// MARK: - Edit-and-resend sheet
+
+private struct EditMessageSheet: View {
+    let originalText: String
+    let onCommit: (String) -> Void
+    let onCancel: () -> Void
+
+    @State private var text: String
+
+    init(originalText: String,
+         onCommit: @escaping (String) -> Void,
+         onCancel: @escaping () -> Void) {
+        self.originalText = originalText
+        self.onCommit = onCommit
+        self.onCancel = onCancel
+        self._text = State(initialValue: originalText)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Edit message and resend")
+                .font(.headline)
+            TextEditor(text: $text)
+                .frame(minWidth: 420, minHeight: 120)
+                .padding(6)
+                .background(Color(NSColor.textBackgroundColor))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
+                )
+            HStack {
+                Spacer()
+                Button("Cancel", action: onCancel)
+                    .keyboardShortcut(.cancelAction)
+                Button("Resend") { onCommit(text) }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(20)
+    }
+}
+
+// MARK: - FileDocument for export
+
+struct MarkdownDocument: FileDocument {
+    static var readableContentTypes: [UTType] { [.plainText] }
+
+    let text: String
+    let suggestedFilename: String
+
+    init(text: String, suggestedFilename: String) {
+        self.text = text
+        self.suggestedFilename = suggestedFilename
+    }
+
+    init(configuration: ReadConfiguration) throws {
+        throw CocoaError(.fileReadUnsupportedScheme)
+    }
+
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        FileWrapper(regularFileWithContents: Data(text.utf8))
     }
 }

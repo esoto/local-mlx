@@ -37,6 +37,53 @@ final class OpenAIDTOsTests: XCTestCase {
         XCTAssertEqual(messages[1]["content"] as? String, "Hello")
     }
 
+    func test_chatRequest_encodesExtraSamplingParams_whenSet() throws {
+        let request = ChatRequest(
+            model: "m",
+            messages: [ChatMessage(role: "user", content: "hi")],
+            stream: true,
+            temperature: 0.7,
+            topP: 1.0,
+            maxTokens: 128,
+            presencePenalty: 0.3,
+            frequencyPenalty: 0.4,
+            repetitionPenalty: 1.1,
+            seed: 42,
+            streamOptions: .init(includeUsage: true)
+        )
+
+        let data = try JSONEncoder().encode(request)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+        XCTAssertEqual(json["presence_penalty"] as? Double, 0.3)
+        XCTAssertEqual(json["frequency_penalty"] as? Double, 0.4)
+        XCTAssertEqual(json["repetition_penalty"] as? Double, 1.1)
+        XCTAssertEqual(json["seed"] as? Int, 42)
+
+        let streamOpts = try XCTUnwrap(json["stream_options"] as? [String: Any])
+        XCTAssertEqual(streamOpts["include_usage"] as? Bool, true)
+    }
+
+    func test_chatRequest_omitsExtraSamplingParams_whenNil() throws {
+        let request = ChatRequest(
+            model: "m",
+            messages: [ChatMessage(role: "user", content: "hi")],
+            stream: true,
+            temperature: 0.7,
+            topP: 1.0,
+            maxTokens: 128
+        )
+
+        let data = try JSONEncoder().encode(request)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+        XCTAssertNil(json["presence_penalty"])
+        XCTAssertNil(json["frequency_penalty"])
+        XCTAssertNil(json["repetition_penalty"])
+        XCTAssertNil(json["seed"])
+        XCTAssertNil(json["stream_options"])
+    }
+
     func test_chatRequest_omitsSystemMessageWhenEmpty_whenConstructedFromConversation() throws {
         // The helper used by ChatViewModel should drop an empty system prompt.
         let messages = ChatRequest.buildMessages(
@@ -108,6 +155,37 @@ final class OpenAIDTOsTests: XCTestCase {
 
         let chunk = try JSONDecoder().decode(ChatChunk.self, from: json)
         XCTAssertEqual(chunk.choices.first?.finishReason, "stop")
+    }
+
+    func test_chatChunk_decodesUsage_whenPresent() throws {
+        let json = """
+        {
+          "id": "chatcmpl-1",
+          "choices": [],
+          "usage": {
+            "prompt_tokens": 13,
+            "completion_tokens": 42,
+            "total_tokens": 55
+          }
+        }
+        """.data(using: .utf8)!
+
+        let chunk = try JSONDecoder().decode(ChatChunk.self, from: json)
+        XCTAssertEqual(chunk.usage?.promptTokens, 13)
+        XCTAssertEqual(chunk.usage?.completionTokens, 42)
+        XCTAssertEqual(chunk.usage?.totalTokens, 55)
+    }
+
+    func test_chatChunk_usageIsNil_whenAbsent() throws {
+        let json = """
+        {
+          "id": "chatcmpl-1",
+          "choices": [{ "index": 0, "delta": { "content": "x" }, "finish_reason": null }]
+        }
+        """.data(using: .utf8)!
+
+        let chunk = try JSONDecoder().decode(ChatChunk.self, from: json)
+        XCTAssertNil(chunk.usage)
     }
 
     // MARK: - ModelList decoding

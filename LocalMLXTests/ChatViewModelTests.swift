@@ -11,8 +11,9 @@ final class ChatViewModelTests: XCTestCase {
     final class FakeMLXClient: MLXClientProtocol, @unchecked Sendable {
         enum Behavior {
             case deltas([String], perTokenDelay: TimeInterval)
+            case deltasWithUsage([String], UsageStats, perTokenDelay: TimeInterval)
             case failImmediately(MLXClientError)
-            case neverEnding // yields forever until cancelled
+            case neverEnding
         }
 
         var behavior: Behavior = .deltas(["Hello", " ", "world"], perTokenDelay: 0)
@@ -20,7 +21,7 @@ final class ChatViewModelTests: XCTestCase {
 
         func listModels() async throws -> [String] { models }
 
-        func streamChat(_ request: ChatRequest) async throws -> AsyncThrowingStream<String, Error> {
+        func streamChat(_ request: ChatRequest) async throws -> AsyncThrowingStream<StreamEvent, Error> {
             let behavior = self.behavior
             return AsyncThrowingStream { continuation in
                 let task = Task {
@@ -35,8 +36,19 @@ final class ChatViewModelTests: XCTestCase {
                                 if delay > 0 {
                                     try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
                                 }
-                                continuation.yield(d)
+                                continuation.yield(.delta(d))
                             }
+                            continuation.finish()
+
+                        case .deltasWithUsage(let deltas, let usage, let delay):
+                            for d in deltas {
+                                try Task.checkCancellation()
+                                if delay > 0 {
+                                    try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                                }
+                                continuation.yield(.delta(d))
+                            }
+                            continuation.yield(.usage(usage))
                             continuation.finish()
 
                         case .neverEnding:
@@ -44,7 +56,7 @@ final class ChatViewModelTests: XCTestCase {
                             while true {
                                 try Task.checkCancellation()
                                 try await Task.sleep(nanoseconds: 50_000_000)
-                                continuation.yield("tok\(i)")
+                                continuation.yield(.delta("tok\(i)"))
                                 i += 1
                             }
                         }
@@ -84,6 +96,7 @@ final class ChatViewModelTests: XCTestCase {
             client: client,
             modelContext: ctx,
             now: { Date(timeIntervalSince1970: 42) }
+            // wallClock defaults to real Date — needed for tok/s to be non-zero
         )
         return (vm, client, container, convo)
     }
@@ -121,7 +134,7 @@ final class ChatViewModelTests: XCTestCase {
         let (vm, _, _, convo) = try makeFixtures()
         let long = "This is a really very long user prompt that should definitely be truncated"
         await vm.send(long, in: convo)
-        XCTAssertLessThanOrEqual(convo.title.count, 41) // 40 + optional ellipsis
+        XCTAssertLessThanOrEqual(convo.title.count, 41)
         XCTAssertTrue(long.hasPrefix(convo.title.replacingOccurrences(of: "…", with: "")))
     }
 
@@ -140,6 +153,37 @@ final class ChatViewModelTests: XCTestCase {
         XCTAssertEqual(convo.title, "My Custom Title")
     }
 
+    // MARK: - Usage + tok/s
+
+    func test_send_writesUsageToAssistantMessage() async throws {
+        let usage = UsageStats(promptTokens: 5, completionTokens: 3, totalTokens: 8)
+        let (vm, _, _, convo) = try makeFixtures(
+            clientBehavior: .deltasWithUsage(["a", "b", "c"], usage, perTokenDelay: 0.02)
+        )
+
+        await vm.send("hi", in: convo)
+
+        let assistant = convo.sortedMessages.last
+        XCTAssertEqual(assistant?.promptTokens, 5)
+        XCTAssertEqual(assistant?.completionTokens, 3)
+    }
+
+    func test_send_computesTokensPerSecondWhenElapsedIsMeasurable() async throws {
+        let usage = UsageStats(promptTokens: 1, completionTokens: 3, totalTokens: 4)
+        let (vm, _, _, convo) = try makeFixtures(
+            // 20ms × 3 tokens ≈ 60ms of streaming time — enough to measure.
+            clientBehavior: .deltasWithUsage(["a", "b", "c"], usage, perTokenDelay: 0.02)
+        )
+
+        await vm.send("hi", in: convo)
+
+        let tps = convo.sortedMessages.last?.tokensPerSecond
+        XCTAssertNotNil(tps)
+        XCTAssertGreaterThan(tps ?? 0, 0)
+        // Sanity upper bound: 3 tokens over ~60ms is ~50 tok/s; never thousands.
+        XCTAssertLessThan(tps ?? 0, 10_000)
+    }
+
     // MARK: - Stop / cancellation
 
     func test_stop_cancelsInFlightStream_keepsPartialContent() async throws {
@@ -149,7 +193,6 @@ final class ChatViewModelTests: XCTestCase {
 
         let sendTask = Task { await vm.send("count", in: convo) }
 
-        // Wait until we've streamed at least one delta.
         var waited: TimeInterval = 0
         while convo.messages.first(where: { $0.role == .assistant })?.content.isEmpty ?? true {
             try await Task.sleep(nanoseconds: 20_000_000)
@@ -164,7 +207,7 @@ final class ChatViewModelTests: XCTestCase {
         XCTAssertEqual(assistant?.role, .assistant)
         XCTAssertFalse((assistant?.content ?? "").isEmpty,
                        "Partial content should be retained after Stop")
-        // Stop is a user action, not an error — banner stays nil.
+        XCTAssertNil(assistant?.interruptionReason, "Stop is not an interruption")
         XCTAssertNil(vm.errorBanner)
         XCTAssertFalse(vm.isStreaming)
     }
@@ -181,16 +224,97 @@ final class ChatViewModelTests: XCTestCase {
         XCTAssertNotNil(vm.errorBanner)
         XCTAssertTrue(vm.errorBanner?.contains("no such model") ?? false)
         XCTAssertFalse(vm.isStreaming)
-        // User message is still visible (so retry is possible).
         XCTAssertTrue(convo.messages.contains(where: { $0.role == .user && $0.content == "hi" }))
     }
 
-    // MARK: - isStreaming flag lifecycle
+    func test_error_setsInterruptionReasonOnAssistantMessage() async throws {
+        let (vm, _, _, convo) = try makeFixtures(
+            clientBehavior: .failImmediately(.http(status: 500, message: "internal error"))
+        )
+
+        await vm.send("hi", in: convo)
+
+        let assistant = convo.sortedMessages.last
+        XCTAssertEqual(assistant?.role, .assistant)
+        XCTAssertNotNil(assistant?.interruptionReason)
+        XCTAssertTrue(assistant?.interruptionReason?.contains("internal error") ?? false)
+    }
+
+    // MARK: - isStreaming lifecycle
 
     func test_isStreaming_toggles() async throws {
         let (vm, _, _, convo) = try makeFixtures()
         XCTAssertFalse(vm.isStreaming)
         await vm.send("hi", in: convo)
         XCTAssertFalse(vm.isStreaming, "Should be false after completion")
+    }
+
+    // MARK: - regenerate
+
+    func test_regenerate_replacesLastAssistantReply_withoutDuplicatingUser() async throws {
+        let (vm, client, _, convo) = try makeFixtures(
+            clientBehavior: .deltas(["first reply"], perTokenDelay: 0)
+        )
+        await vm.send("hello", in: convo)
+
+        let assistantBefore = convo.sortedMessages.last!
+        XCTAssertEqual(assistantBefore.content, "first reply")
+
+        client.behavior = .deltas(["second reply"], perTokenDelay: 0)
+        await vm.regenerate(assistantMessage: assistantBefore, in: convo)
+
+        let userMessages = convo.messages.filter { $0.role == .user }
+        let assistantMessages = convo.messages.filter { $0.role == .assistant }
+        XCTAssertEqual(userMessages.count, 1)
+        XCTAssertEqual(userMessages.first?.content, "hello")
+        XCTAssertEqual(assistantMessages.count, 1)
+        XCTAssertEqual(assistantMessages.first?.content, "second reply")
+    }
+
+    // MARK: - editAndResend
+
+    func test_editAndResend_updatesUser_regeneratesAssistant() async throws {
+        let (vm, client, _, convo) = try makeFixtures(
+            clientBehavior: .deltas(["original reply"], perTokenDelay: 0)
+        )
+        await vm.send("original", in: convo)
+
+        let userMsg = convo.messages.first(where: { $0.role == .user })!
+
+        client.behavior = .deltas(["edited reply"], perTokenDelay: 0)
+        await vm.editAndResend(userMessage: userMsg, newContent: "edited", in: convo)
+
+        let userMessages = convo.messages.filter { $0.role == .user }
+        let assistantMessages = convo.messages.filter { $0.role == .assistant }
+        XCTAssertEqual(userMessages.count, 1)
+        XCTAssertEqual(userMessages.first?.content, "edited")
+        XCTAssertEqual(assistantMessages.count, 1)
+        XCTAssertEqual(assistantMessages.first?.content, "edited reply")
+    }
+
+    func test_editAndResend_rejectsEmptyContent() async throws {
+        let (vm, _, _, convo) = try makeFixtures()
+        await vm.send("original", in: convo)
+        let userMsg = convo.messages.first(where: { $0.role == .user })!
+        let originalAssistantCount = convo.messages.filter { $0.role == .assistant }.count
+
+        await vm.editAndResend(userMessage: userMsg, newContent: "   ", in: convo)
+
+        XCTAssertEqual(userMsg.content, "original")
+        XCTAssertEqual(convo.messages.filter { $0.role == .assistant }.count, originalAssistantCount)
+    }
+
+    // MARK: - delete
+
+    func test_delete_removesMessageAndBumpsUpdatedAt() async throws {
+        let (vm, _, _, convo) = try makeFixtures()
+        await vm.send("hi", in: convo)
+        XCTAssertEqual(convo.messages.count, 2)
+
+        let target = convo.sortedMessages.first!
+        vm.delete(message: target, in: convo)
+
+        XCTAssertEqual(convo.messages.count, 1)
+        XCTAssertFalse(convo.messages.contains(where: { $0 === target }))
     }
 }
