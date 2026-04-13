@@ -199,6 +199,33 @@ final class ServerLauncherTests: XCTestCase {
         XCTAssertTrue(script.contains("'mlx-community/Weird Model Name'"))
     }
 
+    func test_renderDownloadScript_default_doesNotForceRedownload() {
+        // The non-forced path must not pass --force-download — otherwise
+        // every Download Model click would re-fetch weights unnecessarily.
+        let script = ServerLauncher.renderDownloadScript(
+            modelPath: "m", pythonVenvPath: "")
+        XCTAssertFalse(script.contains("--force-download"))
+    }
+
+    func test_renderDownloadScript_forceRedownload_passesHuggingfaceFlag() {
+        let script = ServerLauncher.renderDownloadScript(
+            modelPath: "mlx-community/gemma-3-4b-it-4bit",
+            pythonVenvPath: "",
+            forceRedownload: true)
+        XCTAssertTrue(script.contains("huggingface-cli download 'mlx-community/gemma-3-4b-it-4bit' --force-download"),
+                      "force mode must pass --force-download to huggingface-cli")
+    }
+
+    func test_renderDownloadScript_forceRedownload_updatesHeaderMessage() {
+        // The Terminal banner distinguishes a fresh download from a
+        // force update so users see what's happening.
+        let script = ServerLauncher.renderDownloadScript(
+            modelPath: "m", pythonVenvPath: "", forceRedownload: true)
+        XCTAssertTrue(script.contains("UPDATING"),
+                      "force mode should show an UPDATING header instead of 'downloading'")
+        XCTAssertTrue(script.contains("force re-download"))
+    }
+
     // MARK: - Install script
 
     func test_renderInstallScript_containsPipInstallMlxLmAndMlxVlm() {

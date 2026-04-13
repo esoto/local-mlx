@@ -52,18 +52,29 @@ struct SettingsView: View {
                        isOn: $settings.serverRunInBackground)
                     .help("When enabled, the server is nohup'd and logged to ~/Library/Logs/LocalMLX/server.log. The Terminal window opens briefly to start it — you can close it immediately and the server keeps running. Use Stop Server to kill it.")
 
+                // Row 1 — runtime actions on the currently configured model.
                 HStack {
                     Button("Start Server") { launchServer() }
                         .disabled(settings.mlxModelPath.trimmingCharacters(in: .whitespaces).isEmpty)
                     Button("Stop Server") { stopServer() }
                         .disabled(!settings.serverRunInBackground)
                         .help("Only available in background mode. Foreground servers are stopped by closing their Terminal window.")
+                    launchStatusView
+                    Spacer()
+                }
+
+                // Row 2 — model management. Split out of row 1 so four
+                // buttons don't overflow the 480px-wide Settings window.
+                HStack {
                     Button("Download Model…") { downloadModel() }
                         .disabled(settings.mlxModelPath.trimmingCharacters(in: .whitespaces).isEmpty)
                         .help("Pre-fetches the selected model via huggingface-cli so you can see real download progress in Terminal. Once it finishes, Start Server is instant because the weights are already cached.")
+                    Button("Update Model…") { updateModel() }
+                        .disabled(settings.mlxModelPath.trimmingCharacters(in: .whitespaces).isEmpty)
+                        .help("Forces a fresh re-download, replacing the cached copy with the newest mlx-community build. Use this when a model has been re-quantised or converted with a newer mlx-vlm.")
                     Button("Install MLX…") { installMLX() }
                         .help("First-time setup: creates a Python virtualenv at ~/mlx-env and installs mlx-lm inside it. Opens in Terminal so you can watch the install.")
-                    launchStatusView
+                    Spacer()
                 }
 
                 Text("Writes a shell script to the app's Application Support folder and opens it in Terminal. The server runs as a separate process, so its memory (model weights, KV cache) is not counted against LocalMLX. In background mode, logs go to ~/Library/Logs/LocalMLX/server.log.")
@@ -247,6 +258,17 @@ struct SettingsView: View {
     private func downloadModel() {
         do {
             let url = try ServerLauncher.writeAndLaunchDownload(
+                modelPath: settings.mlxModelPath,
+                pythonVenvPath: settings.pythonVenvPath)
+            launchState = .launched(url.path)
+        } catch {
+            launchState = .failed(error.localizedDescription)
+        }
+    }
+
+    private func updateModel() {
+        do {
+            let url = try ServerLauncher.writeAndLaunchUpdate(
                 modelPath: settings.mlxModelPath,
                 pythonVenvPath: settings.pythonVenvPath)
             launchState = .launched(url.path)
