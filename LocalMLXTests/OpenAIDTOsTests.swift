@@ -89,8 +89,8 @@ final class OpenAIDTOsTests: XCTestCase {
         let messages = ChatRequest.buildMessages(
             systemPrompt: "",
             history: [
-                (role: "user", content: "hi"),
-                (role: "assistant", content: "hello")
+                ChatHistoryEntry(role: "user", text: "hi"),
+                ChatHistoryEntry(role: "assistant", text: "hello")
             ]
         )
         XCTAssertEqual(messages.count, 2)
@@ -100,12 +100,125 @@ final class OpenAIDTOsTests: XCTestCase {
     func test_chatRequest_includesSystemMessageWhenPresent() throws {
         let messages = ChatRequest.buildMessages(
             systemPrompt: "  be terse  ",
-            history: [(role: "user", content: "hi")]
+            history: [ChatHistoryEntry(role: "user", text: "hi")]
         )
         XCTAssertEqual(messages.count, 2)
         XCTAssertEqual(messages[0].role, "system")
-        XCTAssertEqual(messages[0].content, "be terse")
+        XCTAssertEqual(messages[0].content, .text("be terse"))
         XCTAssertEqual(messages[1].role, "user")
+    }
+
+    // MARK: - Multimodal content encoding
+
+    func test_messageContent_text_encodesAsPlainJSONString() throws {
+        // Critical for backwards compat: a text-only message must NOT
+        // become a one-element array because non-vision mlx-lm builds
+        // still expect `content: "..."` in the plain string form.
+        let msg = ChatMessage(role: "user", content: .text("hello"))
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let data = try encoder.encode(msg)
+        let str = String(data: data, encoding: .utf8)!
+        XCTAssertEqual(str, #"{"content":"hello","role":"user"}"#)
+    }
+
+    func test_messageContent_parts_encodesAsJSONArray() throws {
+        let msg = ChatMessage(
+            role: "user",
+            content: .parts([
+                .text("What is in this picture?"),
+                .imageURL("data:image/jpeg;base64,AAAA"),
+            ])
+        )
+        let data = try JSONEncoder().encode(msg)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+        let content = try XCTUnwrap(json["content"] as? [[String: Any]])
+        XCTAssertEqual(content.count, 2)
+
+        XCTAssertEqual(content[0]["type"] as? String, "text")
+        XCTAssertEqual(content[0]["text"] as? String, "What is in this picture?")
+
+        XCTAssertEqual(content[1]["type"] as? String, "image_url")
+        let imageURL = try XCTUnwrap(content[1]["image_url"] as? [String: Any])
+        XCTAssertEqual(imageURL["url"] as? String, "data:image/jpeg;base64,AAAA")
+    }
+
+    func test_contentPart_text_hasExactOpenAIShape() throws {
+        let data = try JSONEncoder().encode(ContentPart.text("hi"))
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(json["type"] as? String, "text")
+        XCTAssertEqual(json["text"] as? String, "hi")
+        XCTAssertEqual(json.keys.sorted(), ["text", "type"])
+    }
+
+    func test_contentPart_imageURL_wrapsURLInNestedObject() throws {
+        // OpenAI's shape is `"image_url": {"url": "..."}`, not a bare string.
+        let data = try JSONEncoder().encode(
+            ContentPart.imageURL("data:image/png;base64,ZZZ"))
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(json["type"] as? String, "image_url")
+        let imageURL = try XCTUnwrap(json["image_url"] as? [String: Any])
+        XCTAssertEqual(imageURL["url"] as? String, "data:image/png;base64,ZZZ")
+    }
+
+    func test_messageContent_expressibleByStringLiteral_producesTextCase() {
+        // Existing text-only call sites pass string literals directly.
+        let content: MessageContent = "literal"
+        XCTAssertEqual(content, .text("literal"))
+    }
+
+    // MARK: - buildMessages with attachments
+
+    func test_buildMessages_withAttachments_producesContentPartsArray() {
+        let attachment = ChatHistoryEntry.Attachment(
+            data: Data([0xFF, 0xD8]),   // JPEG magic bytes, just for the test
+            mimeType: "image/jpeg")
+        let messages = ChatRequest.buildMessages(
+            systemPrompt: "",
+            history: [
+                ChatHistoryEntry(role: "user",
+                                 text: "describe this",
+                                 attachments: [attachment])
+            ])
+        XCTAssertEqual(messages.count, 1)
+        guard case .parts(let parts) = messages[0].content else {
+            XCTFail("expected parts for a message with attachments")
+            return
+        }
+        XCTAssertEqual(parts.count, 2)
+        XCTAssertEqual(parts[0], .text("describe this"))
+        // Base64 of [0xFF, 0xD8] is "/9g="
+        XCTAssertEqual(parts[1], .imageURL("data:image/jpeg;base64,/9g="))
+    }
+
+    func test_buildMessages_withEmptyTextAndAttachment_omitsEmptyTextPart() {
+        // If the user just drops an image without typing anything, we
+        // shouldn't emit a blank text part — just the image.
+        let attachment = ChatHistoryEntry.Attachment(
+            data: Data([0x89]), mimeType: "image/png")
+        let messages = ChatRequest.buildMessages(
+            systemPrompt: "",
+            history: [
+                ChatHistoryEntry(role: "user",
+                                 text: "",
+                                 attachments: [attachment])
+            ])
+        guard case .parts(let parts) = messages[0].content else {
+            XCTFail("expected parts")
+            return
+        }
+        XCTAssertEqual(parts.count, 1)
+        XCTAssertEqual(parts[0], .imageURL("data:image/png;base64,iQ=="))
+    }
+
+    func test_buildMessages_noAttachments_stillUsesPlainStringContent() {
+        // Sanity check: removing attachments must leave the wire
+        // format untouched for existing text-only servers.
+        let messages = ChatRequest.buildMessages(
+            systemPrompt: "",
+            history: [ChatHistoryEntry(role: "user", text: "hi")])
+        XCTAssertEqual(messages[0].content, .text("hi"))
     }
 
     // MARK: - ChatChunk decoding

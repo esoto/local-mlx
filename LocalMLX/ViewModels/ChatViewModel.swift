@@ -241,9 +241,14 @@ final class ChatViewModel {
         modelContext.insert(assistantMsg)
 
         // Build the OpenAI request from the full (persisted) conversation.
+        // Attachments are carried through as ChatHistoryEntry so that the
+        // builder can emit content parts for messages with images.
+        // (Image attachments are plumbed through in a follow-up commit.)
         let history = conversation.sortedMessages
             .filter { !($0.role == .assistant && $0.content.isEmpty) }
-            .map { (role: $0.role.rawValue, content: $0.content) }
+            .map { msg in
+                ChatHistoryEntry(role: msg.role.rawValue, text: msg.content)
+            }
 
         let request = ChatRequest(
             model: conversation.modelId ?? "",
