@@ -40,6 +40,9 @@ struct ChatView: View {
             content
 
             Divider()
+            if showsVisionMismatchWarning {
+                visionMismatchWarning
+            }
             ComposerView(
                 text: $draft,
                 attachments: $draftAttachments,
@@ -126,6 +129,38 @@ struct ChatView: View {
         let hasAttachments = !draftAttachments.isEmpty
         let hasModel = !(conversation.modelId ?? "").isEmpty
         return (hasText || hasAttachments) && hasModel
+    }
+
+    /// `true` when the composer has image attachments pending AND the
+    /// conversation's configured model is known in the catalog as a
+    /// text-only entry. Custom paths (unknown to the catalog) don't
+    /// trigger the warning — we can't tell what they support, and the
+    /// server-error translator catches the rejection at send time
+    /// anyway.
+    private var showsVisionMismatchWarning: Bool {
+        guard !draftAttachments.isEmpty else { return false }
+        guard let modelId = conversation.modelId,
+              let entry = MLXModelCatalog.find(modelId)
+        else { return false }
+        return !entry.isVision
+    }
+
+    @ViewBuilder
+    private var visionMismatchWarning: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+            Text("This model is text-only. The server will reject image attachments — pick a vision-capable model in Settings (marked with 👁), or remove the attachments before sending.")
+                .font(.caption)
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer()
+        }
+        .padding(10)
+        .background(Color.orange.opacity(0.12))
+        .overlay(
+            Rectangle().fill(Color.orange.opacity(0.35)).frame(height: 1),
+            alignment: .bottom)
     }
 
     private func send() {

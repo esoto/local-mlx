@@ -241,6 +241,29 @@ final class ChatViewModelTests: XCTestCase {
         XCTAssertTrue(convo.messages.contains(where: { $0.role == .user && $0.content == "hi" }))
     }
 
+    func test_error_visionMismatch_setsFriendlyInterruptionMessage() async throws {
+        // End-to-end: when mlx_lm.server returns its multimodal-reject
+        // error, the assistant bubble's interruption text should be
+        // the translated guidance, not the raw server JSON.
+        let (vm, client, _, convo) = try makeFixtures(
+            clientBehavior: .failImmediately(
+                .http(status: 404,
+                      message: "Only 'text' content type is supported.")))
+        _ = client
+
+        await vm.send("what's this?", in: convo)
+
+        let interruption = convo.sortedMessages.last?.interruptionReason
+        XCTAssertNotNil(interruption)
+        XCTAssertTrue(interruption?.contains("doesn't support images") ?? false,
+                      "interruption should carry the translator's friendly guidance")
+        XCTAssertFalse(interruption?.contains("Only 'text' content type") ?? true,
+                       "raw server string should not survive translation")
+
+        // Error banner gets the same treatment.
+        XCTAssertTrue(vm.errorBanner?.contains("doesn't support images") ?? false)
+    }
+
     func test_error_setsInterruptionReasonOnAssistantMessage() async throws {
         let (vm, _, _, convo) = try makeFixtures(
             clientBehavior: .failImmediately(.http(status: 500, message: "internal error"))

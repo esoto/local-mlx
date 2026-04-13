@@ -343,8 +343,14 @@ final class ChatViewModel {
             } catch MLXClientError.canceled {
                 self.log.info("stream canceled by user")
             } catch let error as MLXClientError {
-                interruption = error.errorDescription
-                self.errorBanner = error.errorDescription
+                // Translate known-cryptic server errors (e.g. mlx_lm's
+                // "Only 'text' content type is supported") into
+                // actionable messages so the user isn't stuck staring
+                // at raw JSON. The raw error still goes to the log for
+                // debugging.
+                let userMessage = ServerErrorTranslator.friendlyMessage(for: error)
+                interruption = userMessage
+                self.errorBanner = userMessage
                 self.log.error("stream error: \(error.localizedDescription, privacy: .public)")
             } catch is CancellationError {
                 self.log.info("task canceled")
