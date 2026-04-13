@@ -159,7 +159,7 @@ struct ComposerView: View {
                     forTypeIdentifier: UTType.image.identifier
                 ) { data, _ in
                     if let data = data {
-                        DispatchQueue.main.async { attachData(data, mimeType: "image/png") }
+                        attachDataInBackground(data, mimeType: "image/png")
                     }
                 }
             } else if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
@@ -172,7 +172,7 @@ struct ComposerView: View {
                           let fileData = try? Data(contentsOf: url)
                     else { return }
                     let mime = mimeForURL(url)
-                    DispatchQueue.main.async { attachData(fileData, mimeType: mime) }
+                    attachDataInBackground(fileData, mimeType: mime)
                 }
             }
         }
@@ -181,7 +181,7 @@ struct ComposerView: View {
     private func handleFileURLs(_ urls: [URL]) {
         for url in urls {
             guard let data = try? Data(contentsOf: url) else { continue }
-            attachData(data, mimeType: mimeForURL(url))
+            attachDataInBackground(data, mimeType: mimeForURL(url))
         }
     }
 
@@ -189,26 +189,31 @@ struct ComposerView: View {
         let pb = NSPasteboard.general
         if let image = pb.readObjects(forClasses: [NSImage.self])?.first as? NSImage,
            let data = imagePNGData(image) {
-            attachData(data, mimeType: "image/png")
+            attachDataInBackground(data, mimeType: "image/png")
             return true
         }
         return false
     }
 
-    private func attachData(_ data: Data, mimeType: String) {
-        // Downscale large images before storing so the on-disk blob and
-        // the eventual base64 `data:` URL stay reasonable. Small images
-        // pass through without re-encoding.
-        guard let processed = ImageProcessing.process(data, originalMimeType: mimeType) else {
-            return
-        }
-        attachments.append(
-            ChatViewModel.PendingAttachment(
+    /// Process raw image bytes off the main thread, then hop back to
+    /// update the `@State attachments` binding. The processing step
+    /// (NSImage decode + JPEG re-encode) can be hundreds of
+    /// milliseconds for a large screenshot — doing it on main made
+    /// Send clicks feel unresponsive after a big drop.
+    private func attachDataInBackground(_ data: Data, mimeType: String) {
+        Task.detached(priority: .userInitiated) {
+            guard let processed = ImageProcessing.process(data, originalMimeType: mimeType) else {
+                return
+            }
+            let pending = ChatViewModel.PendingAttachment(
                 data: processed.data,
                 mimeType: processed.mimeType,
                 width: processed.width,
                 height: processed.height)
-        )
+            await MainActor.run {
+                attachments.append(pending)
+            }
+        }
     }
 
     // MARK: - Helpers

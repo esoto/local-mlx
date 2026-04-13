@@ -94,12 +94,50 @@ struct MessageBubble: View {
                 .fixedSize(horizontal: false, vertical: true)
         case .assistant:
             if message.content.isEmpty && message.interruptionReason == nil {
-                ProgressView()
-                    .controlSize(.small)
-                    .padding(.vertical, 2)
+                waitingIndicator
             } else {
                 MarkdownText(content: message.content)
             }
+        }
+    }
+
+    /// Shown while an assistant message has no content and no error.
+    /// Uses `TimelineView` so the elapsed seconds update once per second
+    /// — doubly useful as a diagnostic: if the number stops advancing
+    /// the main thread is blocked, if it keeps advancing the server is
+    /// just slow (common on vision models during their first prompt
+    /// processing).
+    @ViewBuilder
+    private var waitingIndicator: some View {
+        TimelineView(.periodic(from: message.createdAt, by: 1)) { context in
+            let elapsed = max(0, context.date.timeIntervalSince(message.createdAt))
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text(Self.waitingText(elapsed: elapsed))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.vertical, 2)
+        }
+    }
+
+    /// Progressive hint based on how long we've been waiting for the
+    /// first token. Kept `static` and pure so it's unit-testable
+    /// without spinning up a SwiftUI view hierarchy.
+    static func waitingText(elapsed: TimeInterval) -> String {
+        let secs = Int(elapsed)
+        switch elapsed {
+        case ..<3:
+            return "Waiting for response…"
+        case ..<15:
+            return "Waiting for first token — \(secs)s"
+        case ..<45:
+            return "Still waiting — \(secs)s. Vision models can take 10–30s to process an image before the first token arrives."
+        case ..<120:
+            return "Still waiting — \(secs)s. The model may still be loading into memory, or prompt processing is slow. Click Stop to cancel."
+        default:
+            return "No response after \(secs)s. The server is likely stuck or a huge model is still loading. Click Stop and check the Terminal window for errors."
         }
     }
 
