@@ -223,8 +223,9 @@ struct SettingsView: View {
     }
 
     private func stopServer() {
+        let port = AppSettings.makeBaseURL().port ?? 8080
         do {
-            _ = try ServerLauncher.writeAndLaunchStop()
+            _ = try ServerLauncher.writeAndLaunchStop(port: port)
             launchState = .launched("Stop script opened in Terminal")
         } catch {
             launchState = .failed(error.localizedDescription)

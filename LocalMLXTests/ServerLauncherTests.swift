@@ -182,16 +182,73 @@ final class ServerLauncherTests: XCTestCase {
 
     // MARK: - Stop script
 
-    func test_renderStopScript_killsRecordedPIDAndRemovesFile() {
+    func test_renderStopScript_embedsPIDFileAndPort() {
         let script = ServerLauncher.renderStopScript(
-            pidFilePath: "/tmp/LocalMLX/server.pid")
-
+            pidFilePath: "/tmp/LocalMLX/server.pid", port: 8080)
         XCTAssertTrue(script.hasPrefix("#!/bin/bash"))
         XCTAssertTrue(script.contains("PIDFILE='/tmp/LocalMLX/server.pid'"))
-        XCTAssertTrue(script.contains("kill \"$PID\""))
+        XCTAssertTrue(script.contains("PORT=8080"))
+    }
+
+    func test_renderStopScript_escalatesFromSigtermToSigkill() {
+        // The terminate_pid helper must attempt graceful SIGTERM first,
+        // then poll, then escalate to SIGKILL. If either step is
+        // missing, the stop script reproduces the zombie-server bug.
+        let script = ServerLauncher.renderStopScript(
+            pidFilePath: "/tmp/pid", port: 8080)
+        XCTAssertTrue(script.contains("kill \"$pid\" 2>/dev/null || true"),
+                      "must send SIGTERM first")
+        XCTAssertTrue(script.contains("kill -9 \"$pid\" 2>/dev/null || true"),
+                      "must escalate to SIGKILL if graceful shutdown fails")
+        let sigtermRange = script.range(of: "kill \"$pid\" 2>/dev/null")!
+        let sigkillRange = script.range(of: "kill -9 \"$pid\"")!
+        XCTAssertLessThan(sigtermRange.lowerBound, sigkillRange.lowerBound)
+    }
+
+    func test_renderStopScript_fallsBackToPortScan() {
+        // If the PID file is missing or stale, lsof the port to find
+        // whatever zombie is still bound to it.
+        let script = ServerLauncher.renderStopScript(
+            pidFilePath: "/tmp/pid", port: 9090)
+        XCTAssertTrue(script.contains("lsof -ti tcp:$PORT"),
+                      "must check port for zombie processes")
+        XCTAssertTrue(script.contains("PORT=9090"),
+                      "port must be hardcoded into the generated script")
+    }
+
+    func test_renderStopScript_cleansUpPIDFile() {
+        let script = ServerLauncher.renderStopScript(
+            pidFilePath: "/tmp/pid", port: 8080)
         XCTAssertTrue(script.contains("rm -f \"$PIDFILE\""))
-        XCTAssertTrue(script.contains("No LocalMLX server PID file found"),
-                      "should handle the 'nothing to stop' case gracefully")
+    }
+
+    // MARK: - Log rotation
+
+    func test_renderScript_backgroundMode_rotatesExistingLargeLog() {
+        // The background start script should rotate the log if it's
+        // grown past the threshold — otherwise 15s polling creates
+        // unbounded growth.
+        let config = ServerLauncher.Config(
+            modelPath: "m",
+            pythonVenvPath: "",
+            port: 8080,
+            background: true,
+            pidFilePath: "/tmp/pid",
+            logFilePath: "/tmp/server.log")
+        let script = ServerLauncher.renderScript(config)
+        XCTAssertTrue(script.contains("mv \"$LOG\" \"$LOG.old\""),
+                      "should rotate old log to .old suffix")
+        XCTAssertTrue(script.contains("\(ServerLauncher.logRotationThresholdBytes)"),
+                      "should embed the configured threshold")
+    }
+
+    func test_renderScript_foregroundMode_doesNotRotateLog() {
+        // Foreground mode doesn't use a log file — it writes to
+        // Terminal directly — so the rotation clause must not appear.
+        let config = ServerLauncher.Config(
+            modelPath: "m", pythonVenvPath: "", port: 8080, background: false)
+        let script = ServerLauncher.renderScript(config)
+        XCTAssertFalse(script.contains("mv \"$LOG\" \"$LOG.old\""))
     }
 
     // MARK: - write round-trip
