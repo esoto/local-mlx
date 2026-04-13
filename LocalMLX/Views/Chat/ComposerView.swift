@@ -196,18 +196,18 @@ struct ComposerView: View {
     }
 
     private func attachData(_ data: Data, mimeType: String) {
-        var width: Int?
-        var height: Int?
-        if let image = NSImage(data: data) {
-            width = Int(image.size.width)
-            height = Int(image.size.height)
+        // Downscale large images before storing so the on-disk blob and
+        // the eventual base64 `data:` URL stay reasonable. Small images
+        // pass through without re-encoding.
+        guard let processed = ImageProcessing.process(data, originalMimeType: mimeType) else {
+            return
         }
         attachments.append(
             ChatViewModel.PendingAttachment(
-                data: data,
-                mimeType: mimeType,
-                width: width,
-                height: height)
+                data: processed.data,
+                mimeType: processed.mimeType,
+                width: processed.width,
+                height: processed.height)
         )
     }
 
