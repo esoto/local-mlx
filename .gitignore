@@ -1,0 +1,34 @@
+# Xcode / SwiftPM
+.build/
+DerivedData/
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+*.xcuserstate
+*.pbxuser
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# SwiftPM
+Package.resolved
+.swiftpm/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+
+# Python venv for running mlx-lm server locally
+.venv/
+venv/
+__pycache__/
+
+# Editor
+.idea/
+.vscode/
+*.swp

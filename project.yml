@@ -1,0 +1,76 @@
+name: LocalMLX
+options:
+  bundleIdPrefix: dev.localmlx
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+settings:
+  base:
+    SWIFT_VERSION: "5.10"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    ENABLE_HARDENED_RUNTIME: YES
+    DEAD_CODE_STRIPPING: YES
+packages:
+  MarkdownUI:
+    url: https://github.com/gonzalezreal/swift-markdown-ui
+    from: "2.4.0"
+targets:
+  LocalMLX:
+    type: application
+    platform: macOS
+    sources:
+      - path: LocalMLX
+    dependencies:
+      - package: MarkdownUI
+        product: MarkdownUI
+    info:
+      path: LocalMLX/Info.plist
+      properties:
+        CFBundleDisplayName: LocalMLX
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        LSMinimumSystemVersion: "14.0"
+        NSHumanReadableCopyright: ""
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+    entitlements:
+      path: LocalMLX/LocalMLX.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.network.client: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.localmlx.LocalMLX
+        GENERATE_INFOPLIST_FILE: NO
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_IDENTITY: "-"
+        COMBINE_HIDPI_IMAGES: YES
+  LocalMLXTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: LocalMLXTests
+    dependencies:
+      - target: LocalMLX
+    settings:
+      base:
+        BUNDLE_LOADER: "$(TEST_HOST)"
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/LocalMLX.app/Contents/MacOS/LocalMLX"
+        PRODUCT_BUNDLE_IDENTIFIER: dev.localmlx.LocalMLXTests
+schemes:
+  LocalMLX:
+    build:
+      targets:
+        LocalMLX: all
+        LocalMLXTests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - LocalMLXTests
+    profile:
+      config: Release
+    archive:
+      config: Release
