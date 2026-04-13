@@ -77,12 +77,44 @@ final class MLXModelCatalogTests: XCTestCase {
                        "catalog should include at least one vision model")
     }
 
-    func test_visionFlag_alignsWithFamily() {
-        // Every vision-family entry should be flagged, and vice versa.
-        for entry in MLXModelCatalog.builtIn {
-            XCTAssertEqual(entry.isVision, entry.family == .vision,
-                           "\(entry.id) vision flag does not match family")
-        }
+    func test_visionIsOrthogonalToFamily_visionEntriesLiveInNaturalFamilies() {
+        // Vision-capable models should sit under the family they
+        // actually belong to — Qwen2-VL under .qwen, LLaVA under
+        // .mistral, Phi-vision under .phi, Gemma 3/4 under .gemma.
+        // The eye icon in the picker is the signal for vision, not a
+        // separate `.vision` family bucket.
+        let visionFamilies = Set(
+            MLXModelCatalog.builtIn.filter(\.isVision).map(\.family))
+        XCTAssertTrue(visionFamilies.contains(.qwen),
+                      "Qwen2-VL should live under the Qwen family")
+        XCTAssertTrue(visionFamilies.contains(.mistral),
+                      "LLaVA (Mistral base) should live under Mistral")
+        XCTAssertTrue(visionFamilies.contains(.phi),
+                      "Phi vision should live under Phi")
+        XCTAssertTrue(visionFamilies.contains(.gemma),
+                      "Gemma 3/4 should live under Gemma")
+    }
+
+    func test_gemma_hasBothTextAndVisionVariants() {
+        let gemmaEntries = MLXModelCatalog.builtIn.filter { $0.family == .gemma }
+        let text = gemmaEntries.filter { !$0.isVision }
+        let vision = gemmaEntries.filter { $0.isVision }
+        XCTAssertFalse(text.isEmpty, "should still have text-only Gemma entries")
+        XCTAssertFalse(vision.isEmpty, "should include at least one vision Gemma")
+    }
+
+    func test_gemma3_4b_isVisionAndInCatalog() {
+        let entry = MLXModelCatalog.find("mlx-community/gemma-3-4b-it-4bit")
+        XCTAssertNotNil(entry, "Gemma 3 4B should be in the curated catalog")
+        XCTAssertTrue(entry?.isVision == true)
+        XCTAssertEqual(entry?.family, .gemma)
+    }
+
+    func test_gemma4_e4b_isVisionAndInCatalog() {
+        let entry = MLXModelCatalog.find("mlx-community/gemma-4-e4b-it-4bit")
+        XCTAssertNotNil(entry, "Gemma 4 E4B should be in the curated catalog")
+        XCTAssertTrue(entry?.isVision == true)
+        XCTAssertEqual(entry?.family, .gemma)
     }
 
     func test_defaultInit_isNotVision() {
