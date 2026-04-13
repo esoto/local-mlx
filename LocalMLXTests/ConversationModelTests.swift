@@ -80,5 +80,52 @@ final class ConversationModelTests: XCTestCase {
         XCTAssertEqual(convo.systemPrompt, "")
         XCTAssertNil(convo.modelId)
         XCTAssertTrue(convo.messages.isEmpty)
+        XCTAssertFalse(convo.isArchived, "new conversations start active")
+    }
+
+    func test_archivedFilter_excludesArchivedFromActiveQuery() throws {
+        let container = try makeContainer()
+        let ctx = container.mainContext
+
+        let active = Conversation(title: "Active")
+        let archived = Conversation(title: "Old", isArchived: true)
+        ctx.insert(active)
+        ctx.insert(archived)
+        try ctx.save()
+
+        // The active query used by RootView.
+        let activeDescriptor = FetchDescriptor<Conversation>(
+            predicate: #Predicate { !$0.isArchived })
+        let activeResults = try ctx.fetch(activeDescriptor)
+        XCTAssertEqual(activeResults.map(\.title), ["Active"])
+
+        // The archived query used by RootView when "Show archived" is on.
+        let archivedDescriptor = FetchDescriptor<Conversation>(
+            predicate: #Predicate { $0.isArchived })
+        let archivedResults = try ctx.fetch(archivedDescriptor)
+        XCTAssertEqual(archivedResults.map(\.title), ["Old"])
+    }
+
+    func test_toggleArchiveFlag_movesBetweenQueries() throws {
+        let container = try makeContainer()
+        let ctx = container.mainContext
+
+        let convo = Conversation(title: "Toggle")
+        ctx.insert(convo)
+        try ctx.save()
+
+        let activeDescriptor = FetchDescriptor<Conversation>(
+            predicate: #Predicate { !$0.isArchived })
+        XCTAssertEqual(try ctx.fetch(activeDescriptor).count, 1)
+
+        convo.isArchived = true
+        try ctx.save()
+        XCTAssertEqual(try ctx.fetch(activeDescriptor).count, 0,
+                       "archiving should remove from the active query")
+
+        convo.isArchived = false
+        try ctx.save()
+        XCTAssertEqual(try ctx.fetch(activeDescriptor).count, 1,
+                       "unarchiving should restore it")
     }
 }

@@ -20,6 +20,13 @@ final class Conversation {
     var repetitionPenalty: Double
     var seed: Int?
 
+    /// "Closed but not deleted" state. Archived conversations are filtered
+    /// out of the main sidebar query so SwiftData never hydrates them or
+    /// their message relationships — that's the main memory mitigation
+    /// when a user has accumulated a lot of history. Default false so the
+    /// store can lightweight-migrate from schemas that predate this field.
+    var isArchived: Bool = false
+
     @Relationship(deleteRule: .cascade, inverse: \Message.conversation)
     var messages: [Message] = []
 
@@ -35,7 +42,8 @@ final class Conversation {
          presencePenalty: Double = 0.0,
          frequencyPenalty: Double = 0.0,
          repetitionPenalty: Double = 1.0,
-         seed: Int? = nil) {
+         seed: Int? = nil,
+         isArchived: Bool = false) {
         self.id = id
         self.title = title
         self.createdAt = createdAt
@@ -49,6 +57,7 @@ final class Conversation {
         self.frequencyPenalty = frequencyPenalty
         self.repetitionPenalty = repetitionPenalty
         self.seed = seed
+        self.isArchived = isArchived
     }
 
     /// Messages ordered chronologically. SwiftData doesn't guarantee insertion

@@ -10,18 +10,34 @@ struct RootView: View {
     @Environment(\.openWindow) private var openWindow
     @EnvironmentObject private var settings: AppSettings
 
-    @Query(sort: [SortDescriptor(\Conversation.updatedAt, order: .reverse)])
-    private var conversations: [Conversation]
+    // Active conversations only. Archived rows are filtered out at the
+    // SwiftData layer so they aren't hydrated into memory unless the
+    // user explicitly asks for them.
+    @Query(
+        filter: #Predicate<Conversation> { !$0.isArchived },
+        sort: [SortDescriptor(\Conversation.updatedAt, order: .reverse)]
+    )
+    private var activeConversations: [Conversation]
+
+    @Query(
+        filter: #Predicate<Conversation> { $0.isArchived },
+        sort: [SortDescriptor(\Conversation.updatedAt, order: .reverse)]
+    )
+    private var archivedConversations: [Conversation]
 
     @State private var selectedID: UUID?
 
     var body: some View {
         NavigationSplitView {
             SidebarView(
-                conversations: conversations,
+                conversations: activeConversations,
+                archivedConversations: archivedConversations,
                 selection: $selectedID,
+                showArchived: $settings.showArchived,
                 onNewChat: createNewChat,
                 onDelete: deleteConversation,
+                onArchive: archiveConversation,
+                onUnarchive: unarchiveConversation,
                 onOpenInNewWindow: { openWindow(id: "chat", value: $0.id) }
             )
             .navigationSplitViewColumnWidth(min: 200, ideal: 240)
@@ -38,7 +54,10 @@ struct RootView: View {
             }
         }
         .onAppear {
-            if selectedID == nil { selectedID = conversations.first?.id }
+            restoreSelectionOnLaunch()
+        }
+        .onChange(of: selectedID) { _, newID in
+            settings.lastSelectedConversationID = newID?.uuidString ?? ""
         }
         .onReceive(NotificationCenter.default.publisher(for: .newChatRequested)) { _ in
             createNewChat()
@@ -48,9 +67,13 @@ struct RootView: View {
         }
     }
 
+    private var allConversations: [Conversation] {
+        activeConversations + archivedConversations
+    }
+
     private var selectedConversation: Conversation? {
         guard let id = selectedID else { return nil }
-        return conversations.first(where: { $0.id == id })
+        return allConversations.first(where: { $0.id == id })
     }
 
     // MARK: - Actions
@@ -72,5 +95,34 @@ struct RootView: View {
         if selectedID == convo.id { selectedID = nil }
         modelContext.delete(convo)
         try? modelContext.save()
+    }
+
+    private func archiveConversation(_ convo: Conversation) {
+        convo.isArchived = true
+        convo.updatedAt = .now
+        if selectedID == convo.id { selectedID = nil }
+        try? modelContext.save()
+    }
+
+    private func unarchiveConversation(_ convo: Conversation) {
+        convo.isArchived = false
+        convo.updatedAt = .now
+        try? modelContext.save()
+        selectedID = convo.id
+    }
+
+    /// On first appearance, pick a starting selection: the UUID we
+    /// persisted at last shutdown if it still exists, otherwise the
+    /// newest active conversation.
+    private func restoreSelectionOnLaunch() {
+        guard selectedID == nil else { return }
+        let stored = settings.lastSelectedConversationID
+        if !stored.isEmpty,
+           let uuid = UUID(uuidString: stored),
+           allConversations.contains(where: { $0.id == uuid }) {
+            selectedID = uuid
+        } else {
+            selectedID = activeConversations.first?.id
+        }
     }
 }

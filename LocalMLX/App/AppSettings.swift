@@ -28,6 +28,29 @@ final class AppSettings: ObservableObject {
     @AppStorage("settings.defaultModelId")
     var defaultModelId: String = ""
 
+    // MARK: - Server launcher
+
+    /// Model path or HuggingFace repo id that the generated `.command`
+    /// script will pass to `mlx_lm.server --model`.
+    @AppStorage("settings.mlxModelPath")
+    var mlxModelPath: String = "mlx-community/Llama-3.2-3B-Instruct-4bit"
+
+    /// Optional Python virtualenv to `source` before launching the server.
+    /// Empty means "rely on whatever is on the user's PATH".
+    @AppStorage("settings.pythonVenvPath")
+    var pythonVenvPath: String = ""
+
+    // MARK: - Session resume
+
+    /// UUID string of the last-active conversation, persisted so that
+    /// relaunching the app returns to the same chat.
+    @AppStorage("settings.lastSelectedConversationID")
+    var lastSelectedConversationID: String = ""
+
+    /// Whether the sidebar is currently showing archived conversations.
+    @AppStorage("settings.showArchived")
+    var showArchived: Bool = false
+
     // MARK: - Keys (must match the @AppStorage names above)
 
     private enum Keys {

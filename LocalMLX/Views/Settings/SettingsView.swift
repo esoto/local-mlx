@@ -5,12 +5,19 @@ struct SettingsView: View {
     @Environment(\.mlxClient) private var clientHolder
 
     @State private var testState: TestState = .idle
+    @State private var launchState: LaunchState = .idle
 
     enum TestState: Equatable {
         case idle
         case testing
         case success(Int)
         case failure(String)
+    }
+
+    enum LaunchState: Equatable {
+        case idle
+        case launched(String)   // absolute path of the .command file
+        case failed(String)
     }
 
     var body: some View {
@@ -25,6 +32,26 @@ struct SettingsView: View {
                         .disabled(testState == .testing)
                     testStatusView
                 }
+
+                Divider().padding(.vertical, 4)
+
+                TextField("Model (HF id or path)", text: $settings.mlxModelPath,
+                          prompt: Text("mlx-community/Llama-3.2-3B-Instruct-4bit"))
+                    .textFieldStyle(.roundedBorder)
+                TextField("Python venv (optional)", text: $settings.pythonVenvPath,
+                          prompt: Text("~/mlx-env"))
+                    .textFieldStyle(.roundedBorder)
+
+                HStack {
+                    Button("Start Server in Terminal") { launchServer() }
+                        .disabled(settings.mlxModelPath.trimmingCharacters(in: .whitespaces).isEmpty)
+                    launchStatusView
+                }
+
+                Text("Writes a shell script to the app's Application Support folder and opens it in Terminal. The server runs as a separate process — closing its Terminal window stops it. The LocalMLX app and the server are independent, so the server's memory (model weights, KV cache) is not counted against the app.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Section("Defaults for new chats") {
@@ -79,6 +106,22 @@ struct SettingsView: View {
         }
     }
 
+    @ViewBuilder private var launchStatusView: some View {
+        switch launchState {
+        case .idle:
+            EmptyView()
+        case .launched:
+            Label("Script opened in Terminal", systemImage: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+                .font(.callout)
+        case .failed(let msg):
+            Label(msg, systemImage: "xmark.octagon.fill")
+                .foregroundStyle(.red)
+                .font(.callout)
+                .lineLimit(2)
+        }
+    }
+
     private func testConnection() async {
         testState = .testing
         do {
@@ -88,6 +131,21 @@ struct SettingsView: View {
             testState = .failure(err.errorDescription ?? "Unknown error")
         } catch {
             testState = .failure(error.localizedDescription)
+        }
+    }
+
+    private func launchServer() {
+        let port = AppSettings.makeBaseURL().port ?? 8080
+        let config = ServerLauncher.Config(
+            modelPath: settings.mlxModelPath,
+            pythonVenvPath: settings.pythonVenvPath,
+            port: port
+        )
+        do {
+            let url = try ServerLauncher.writeAndLaunch(config)
+            launchState = .launched(url.path)
+        } catch {
+            launchState = .failed(error.localizedDescription)
         }
     }
 }
