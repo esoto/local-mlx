@@ -6,8 +6,15 @@ struct SettingsView: View {
 
     @State private var testState: TestState = .idle
     @State private var launchState: LaunchState = .idle
-    @State private var modelStatus: ModelDownloadStatus = .unknown(reason: "checking…")
+    @State private var modelStatus: ModelDownloadStatus = .unknown(reason: "not yet checked")
     @State private var isCheckingStatus: Bool = false
+    /// Handle to the in-flight status check so we can cancel it
+    /// before starting a new one. Stored in view state (rather than
+    /// using `.task(id:)`) because `.task(id:)` restarts on every
+    /// change to its id — and wiring that to `settings.mlxModelPath`
+    /// restarted it on every keystroke, which interacted badly with
+    /// macOS TextField focus and blocked typing.
+    @State private var statusCheckTask: Task<Void, Never>?
 
     enum TestState: Equatable {
         case idle
@@ -42,12 +49,20 @@ struct SettingsView: View {
                     modelCatalogMenu
                     Spacer()
                     modelStatusBadge
+                    Button { triggerStatusRefresh() } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Re-check whether this model is cached and up to date on HuggingFace.")
+                    .disabled(isCheckingStatus
+                              || settings.mlxModelPath.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
                 TextField("Model path",
                           text: $settings.mlxModelPath,
                           prompt: Text("mlx-community/Llama-3.2-3B-Instruct-4bit"))
                     .textFieldStyle(.roundedBorder)
-                    .help("HuggingFace repo id or on-disk path. mlx-lm will download the model on first launch if it isn't cached yet.")
+                    .help("HuggingFace repo id or on-disk path. mlx-lm will download the model on first launch if it isn't cached yet. Press Return to re-check download status.")
+                    .onSubmit { triggerStatusRefresh() }
                 TextField("Python venv (optional)", text: $settings.pythonVenvPath,
                           prompt: Text("~/mlx-env"))
                     .textFieldStyle(.roundedBorder)
@@ -122,12 +137,14 @@ struct SettingsView: View {
         }
         .padding(20)
         .frame(width: 480)
-        // Refresh the download status whenever the user picks a
-        // different model. Debounced so typing in the custom-path
-        // field doesn't fire a request per keystroke.
-        .task(id: settings.mlxModelPath) {
-            await refreshModelStatus()
-        }
+        // Fire a single status check the first time Settings opens.
+        // Subsequent refreshes are triggered explicitly — catalog
+        // menu picks, Return in the model path field, or the small
+        // refresh button next to the status badge. Critically NOT
+        // on every keystroke: `.task(id: settings.mlxModelPath)`
+        // restarts on each character change, and on macOS that
+        // loop interfered with TextField input.
+        .onAppear { triggerStatusRefresh() }
     }
 
     private var canDownload: Bool {
@@ -177,27 +194,25 @@ struct SettingsView: View {
         }
     }
 
-    /// Debounced status refresh. Exits early if the model path is
-    /// blank or if the task is cancelled during the debounce window
-    /// (which happens every time SwiftUI restarts this .task on a new
-    /// `mlxModelPath` value — typing in the TextField cancels the
-    /// in-flight check and starts a new one).
-    private func refreshModelStatus() async {
+    /// Kick off a fresh status check, cancelling any in-flight one.
+    /// Called from discrete user actions (appear, menu pick, Return
+    /// in the text field, explicit refresh button) — never from a
+    /// reactive binding that fires on keystrokes.
+    private func triggerStatusRefresh() {
+        statusCheckTask?.cancel()
         let path = settings.mlxModelPath.trimmingCharacters(in: .whitespaces)
         guard !path.isEmpty else {
             modelStatus = .unknown(reason: "no model selected")
+            isCheckingStatus = false
             return
         }
-        // 400 ms debounce so typing doesn't fire one request per keystroke.
-        try? await Task.sleep(nanoseconds: 400_000_000)
-        if Task.isCancelled { return }
-
         isCheckingStatus = true
-        defer { isCheckingStatus = false }
-
-        let status = await ModelDownloadStatusResolver.resolve(repoId: path)
-        if !Task.isCancelled {
-            modelStatus = status
+        statusCheckTask = Task { @MainActor in
+            let status = await ModelDownloadStatusResolver.resolve(repoId: path)
+            if !Task.isCancelled {
+                modelStatus = status
+            }
+            isCheckingStatus = false
         }
     }
 
@@ -232,6 +247,7 @@ struct SettingsView: View {
                     ForEach(group.entries) { entry in
                         Button {
                             settings.mlxModelPath = entry.id
+                            triggerStatusRefresh()
                         } label: {
                             VStack(alignment: .leading, spacing: 1) {
                                 HStack {
