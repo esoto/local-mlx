@@ -35,9 +35,15 @@ struct SettingsView: View {
 
                 Divider().padding(.vertical, 4)
 
-                TextField("Model (HF id or path)", text: $settings.mlxModelPath,
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text("Model")
+                    modelCatalogMenu
+                }
+                TextField("Model path",
+                          text: $settings.mlxModelPath,
                           prompt: Text("mlx-community/Llama-3.2-3B-Instruct-4bit"))
                     .textFieldStyle(.roundedBorder)
+                    .help("HuggingFace repo id or on-disk path. mlx-lm will download the model on first launch if it isn't cached yet.")
                 TextField("Python venv (optional)", text: $settings.pythonVenvPath,
                           prompt: Text("~/mlx-env"))
                     .textFieldStyle(.roundedBorder)
@@ -113,6 +119,53 @@ struct SettingsView: View {
                 .font(.callout)
                 .lineLimit(2)
         }
+    }
+
+    // MARK: - Model catalog menu
+
+    /// Dropdown with curated mlx-community models grouped by family.
+    /// Selecting an entry fills in `mlxModelPath`; users can still type
+    /// a custom path in the TextField below the menu.
+    @ViewBuilder
+    private var modelCatalogMenu: some View {
+        Menu {
+            ForEach(MLXModelCatalog.groupedByFamily, id: \.family) { group in
+                Section(group.family.rawValue) {
+                    ForEach(group.entries) { entry in
+                        Button {
+                            settings.mlxModelPath = entry.id
+                        } label: {
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text("\(entry.displayName)  •  \(formatSize(entry.approxSizeGB))")
+                                Text(entry.blurb)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+            }
+            Divider()
+            Button("Custom…") {
+                // No-op on purpose — user just types in the TextField below.
+            }
+            .disabled(true)
+        } label: {
+            if let entry = MLXModelCatalog.find(settings.mlxModelPath) {
+                Label("\(entry.displayName) • \(formatSize(entry.approxSizeGB))",
+                      systemImage: "cpu")
+            } else if settings.mlxModelPath.isEmpty {
+                Label("Choose a model…", systemImage: "cpu")
+            } else {
+                Label("Custom", systemImage: "square.and.pencil")
+            }
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+    }
+
+    private func formatSize(_ gb: Double) -> String {
+        String(format: "%.1f GB", gb)
     }
 
     @ViewBuilder private var launchStatusView: some View {
