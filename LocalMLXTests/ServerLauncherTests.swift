@@ -151,6 +151,54 @@ final class ServerLauncherTests: XCTestCase {
         XCTAssertFalse(script.contains("nohup mlx_lm.server"))
     }
 
+    // MARK: - Download script
+
+    func test_renderDownloadScript_usesHuggingfaceCLI() {
+        let script = ServerLauncher.renderDownloadScript(
+            modelPath: "mlx-community/Llama-3.2-3B-Instruct-4bit",
+            pythonVenvPath: "")
+        XCTAssertTrue(script.hasPrefix("#!/bin/bash"))
+        XCTAssertTrue(script.contains("huggingface-cli download 'mlx-community/Llama-3.2-3B-Instruct-4bit'"),
+                      "must invoke huggingface-cli with the shell-escaped model path")
+    }
+
+    func test_renderDownloadScript_waitsForKeypress() {
+        // Foreground-style: wait for the user before closing Terminal so
+        // the final "done" message is actually visible.
+        let script = ServerLauncher.renderDownloadScript(
+            modelPath: "m", pythonVenvPath: "")
+        XCTAssertTrue(script.contains("read -n 1 -s"))
+    }
+
+    func test_renderDownloadScript_sourcesVenvWhenProvided() {
+        let script = ServerLauncher.renderDownloadScript(
+            modelPath: "m", pythonVenvPath: "~/mlx-env")
+        let sourceRange = script.range(of: "source '~/mlx-env'/bin/activate")
+        let hfRange = script.range(of: "huggingface-cli download")
+        XCTAssertNotNil(sourceRange, "venv activation line must be present")
+        XCTAssertNotNil(hfRange)
+        if let s = sourceRange, let h = hfRange {
+            XCTAssertLessThan(s.lowerBound, h.lowerBound,
+                              "venv activation must precede huggingface-cli call")
+        }
+    }
+
+    func test_renderDownloadScript_noVenv_omitsSourceLine() {
+        let script = ServerLauncher.renderDownloadScript(
+            modelPath: "m", pythonVenvPath: "   ")
+        XCTAssertFalse(script.contains("source "),
+                       "blank venv path should not emit an activate line")
+    }
+
+    func test_renderDownloadScript_modelPathWithSpaces_isShellEscaped() {
+        // Model paths come from user input — make sure the escape still
+        // wraps quoted paths safely.
+        let script = ServerLauncher.renderDownloadScript(
+            modelPath: "mlx-community/Weird Model Name",
+            pythonVenvPath: "")
+        XCTAssertTrue(script.contains("'mlx-community/Weird Model Name'"))
+    }
+
     // MARK: - Install script
 
     func test_renderInstallScript_containsPipInstallMlxLmAndMlxVlm() {

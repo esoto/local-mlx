@@ -58,6 +58,9 @@ struct SettingsView: View {
                     Button("Stop Server") { stopServer() }
                         .disabled(!settings.serverRunInBackground)
                         .help("Only available in background mode. Foreground servers are stopped by closing their Terminal window.")
+                    Button("Download Model…") { downloadModel() }
+                        .disabled(settings.mlxModelPath.trimmingCharacters(in: .whitespaces).isEmpty)
+                        .help("Pre-fetches the selected model via huggingface-cli so you can see real download progress in Terminal. Once it finishes, Start Server is instant because the weights are already cached.")
                     Button("Install MLX…") { installMLX() }
                         .help("First-time setup: creates a Python virtualenv at ~/mlx-env and installs mlx-lm inside it. Opens in Terminal so you can watch the install.")
                     launchStatusView
@@ -235,6 +238,17 @@ struct SettingsView: View {
     private func installMLX() {
         do {
             let url = try ServerLauncher.writeAndLaunchInstall()
+            launchState = .launched(url.path)
+        } catch {
+            launchState = .failed(error.localizedDescription)
+        }
+    }
+
+    private func downloadModel() {
+        do {
+            let url = try ServerLauncher.writeAndLaunchDownload(
+                modelPath: settings.mlxModelPath,
+                pythonVenvPath: settings.pythonVenvPath)
             launchState = .launched(url.path)
         } catch {
             launchState = .failed(error.localizedDescription)
