@@ -29,12 +29,11 @@ struct ConversationRow: View {
             Spacer(minLength: 0)
         }
         .contentShape(Rectangle())
-        // Double-click to rename must NOT block the List's single-click
-        // selection. `simultaneousGesture` runs alongside the built-in
-        // row selection recognizer instead of swallowing its events.
-        .simultaneousGesture(
-            TapGesture(count: 2).onEnded { beginRenaming() }
-        )
+        // No tap gesture here on purpose: SwiftUI's macOS List dispatches
+        // single clicks directly to its row cell for selection, and *any*
+        // tap gesture attached to the row content — even a double-click
+        // `simultaneousGesture` — breaks that path. Rename is reached via
+        // the context menu below.
         .contextMenu {
             Button("Rename") { beginRenaming() }
         }

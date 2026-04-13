@@ -65,7 +65,67 @@ final class ServerLauncherTests: XCTestCase {
         XCTAssertEqual(ServerLauncher.shellEscape("a b c"), "'a b c'")
     }
 
-    // MARK: - write(_:to:) round-trip
+    // MARK: - Background mode
+
+    func test_renderScript_background_usesNohupAndRecordsPID() {
+        let config = ServerLauncher.Config(
+            modelPath: "mlx-community/Phi-3",
+            pythonVenvPath: "",
+            port: 8080,
+            background: true,
+            pidFilePath: "/tmp/LocalMLX/server.pid",
+            logFilePath: "/tmp/LocalMLX/logs/server.log")
+        let script = ServerLauncher.renderScript(config)
+
+        XCTAssertTrue(script.contains("nohup mlx_lm.server --model 'mlx-community/Phi-3' --port 8080 >> '/tmp/LocalMLX/logs/server.log' 2>&1 &"),
+                      "background mode must nohup and redirect to the log file")
+        XCTAssertTrue(script.contains("echo \"$SERVER_PID\" > '/tmp/LocalMLX/server.pid'"),
+                      "background mode must record the server PID")
+        XCTAssertFalse(script.contains("exec mlx_lm.server"),
+                       "background mode should not use exec — the script has to exit to release Terminal")
+    }
+
+    func test_renderScript_background_withVenv_sourcesBeforeNohup() {
+        let config = ServerLauncher.Config(
+            modelPath: "m",
+            pythonVenvPath: "~/mlx-env",
+            port: 8080,
+            background: true,
+            pidFilePath: "/tmp/server.pid",
+            logFilePath: "/tmp/server.log")
+        let script = ServerLauncher.renderScript(config)
+        let sourceRange = script.range(of: "source ")!
+        let nohupRange = script.range(of: "nohup mlx_lm.server")!
+        XCTAssertLessThan(sourceRange.lowerBound, nohupRange.lowerBound)
+    }
+
+    func test_renderScript_foreground_doesNotMentionNohup() {
+        let config = ServerLauncher.Config(
+            modelPath: "m",
+            pythonVenvPath: "",
+            port: 8080,
+            background: false)
+        let script = ServerLauncher.renderScript(config)
+        XCTAssertFalse(script.contains("nohup"),
+                       "foreground mode must never detach")
+        XCTAssertTrue(script.contains("exec mlx_lm.server"))
+    }
+
+    // MARK: - Stop script
+
+    func test_renderStopScript_killsRecordedPIDAndRemovesFile() {
+        let script = ServerLauncher.renderStopScript(
+            pidFilePath: "/tmp/LocalMLX/server.pid")
+
+        XCTAssertTrue(script.hasPrefix("#!/bin/bash"))
+        XCTAssertTrue(script.contains("PIDFILE='/tmp/LocalMLX/server.pid'"))
+        XCTAssertTrue(script.contains("kill \"$PID\""))
+        XCTAssertTrue(script.contains("rm -f \"$PIDFILE\""))
+        XCTAssertTrue(script.contains("No LocalMLX server PID file found"),
+                      "should handle the 'nothing to stop' case gracefully")
+    }
+
+    // MARK: - write round-trip
 
     func test_write_producesExecutableFileWithRenderedContents() throws {
         let tmp = FileManager.default.temporaryDirectory
@@ -79,12 +139,13 @@ final class ServerLauncherTests: XCTestCase {
             modelPath: "unit-test-model",
             pythonVenvPath: "",
             port: 12345)
+        let script = ServerLauncher.renderScript(config)
 
-        _ = try ServerLauncher.write(config, to: url)
+        _ = try ServerLauncher.write(script, to: url)
 
         // Content matches renderScript exactly.
         let fileContents = try String(contentsOf: url, encoding: .utf8)
-        XCTAssertEqual(fileContents, ServerLauncher.renderScript(config))
+        XCTAssertEqual(fileContents, script)
 
         // File is executable.
         let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
@@ -105,7 +166,8 @@ final class ServerLauncherTests: XCTestCase {
 
         let config = ServerLauncher.Config(
             modelPath: "new-model", pythonVenvPath: "", port: 8080)
-        _ = try ServerLauncher.write(config, to: url)
+        let script = ServerLauncher.renderScript(config)
+        _ = try ServerLauncher.write(script, to: url)
 
         let fileContents = try String(contentsOf: url, encoding: .utf8)
         XCTAssertTrue(fileContents.contains("new-model"))

@@ -42,13 +42,20 @@ struct SettingsView: View {
                           prompt: Text("~/mlx-env"))
                     .textFieldStyle(.roundedBorder)
 
+                Toggle("Run in background (detach from Terminal)",
+                       isOn: $settings.serverRunInBackground)
+                    .help("When enabled, the server is nohup'd and logged to ~/Library/Logs/LocalMLX/server.log. The Terminal window opens briefly to start it — you can close it immediately and the server keeps running. Use Stop Server to kill it.")
+
                 HStack {
-                    Button("Start Server in Terminal") { launchServer() }
+                    Button("Start Server") { launchServer() }
                         .disabled(settings.mlxModelPath.trimmingCharacters(in: .whitespaces).isEmpty)
+                    Button("Stop Server") { stopServer() }
+                        .disabled(!settings.serverRunInBackground)
+                        .help("Only available in background mode. Foreground servers are stopped by closing their Terminal window.")
                     launchStatusView
                 }
 
-                Text("Writes a shell script to the app's Application Support folder and opens it in Terminal. The server runs as a separate process — closing its Terminal window stops it. The LocalMLX app and the server are independent, so the server's memory (model weights, KV cache) is not counted against the app.")
+                Text("Writes a shell script to the app's Application Support folder and opens it in Terminal. The server runs as a separate process, so its memory (model weights, KV cache) is not counted against LocalMLX. In background mode, logs go to ~/Library/Logs/LocalMLX/server.log.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -139,11 +146,21 @@ struct SettingsView: View {
         let config = ServerLauncher.Config(
             modelPath: settings.mlxModelPath,
             pythonVenvPath: settings.pythonVenvPath,
-            port: port
+            port: port,
+            background: settings.serverRunInBackground
         )
         do {
             let url = try ServerLauncher.writeAndLaunch(config)
             launchState = .launched(url.path)
+        } catch {
+            launchState = .failed(error.localizedDescription)
+        }
+    }
+
+    private func stopServer() {
+        do {
+            _ = try ServerLauncher.writeAndLaunchStop()
+            launchState = .launched("Stop script opened in Terminal")
         } catch {
             launchState = .failed(error.localizedDescription)
         }

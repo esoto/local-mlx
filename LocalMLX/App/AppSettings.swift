@@ -40,6 +40,13 @@ final class AppSettings: ObservableObject {
     @AppStorage("settings.pythonVenvPath")
     var pythonVenvPath: String = ""
 
+    /// Whether `ServerLauncher` should detach the server process so the
+    /// user can close Terminal without killing it. Logs go to
+    /// `~/Library/Logs/LocalMLX/server.log` in this mode, and the PID is
+    /// recorded so Stop Server can target it precisely.
+    @AppStorage("settings.serverRunInBackground")
+    var serverRunInBackground: Bool = false
+
     // MARK: - Session resume
 
     /// UUID string of the last-active conversation, persisted so that
