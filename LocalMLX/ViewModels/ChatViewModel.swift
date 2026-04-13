@@ -282,18 +282,25 @@ final class ChatViewModel {
     func reconcileInterruptedMessages(in conversation: Conversation) {
         guard !isStreaming else { return }
 
-        var changed = false
-        for message in conversation.messages
-        where message.role == .assistant
-            && message.content.isEmpty
-            && message.interruptionReason == nil {
+        // Take a snapshot of the relationship first so we never mutate
+        // properties on elements while iterating over the underlying
+        // SwiftData array. In practice the relationship is backed by
+        // an Array and mutating a property on one element doesn't
+        // touch the collection shape, but iterating over a local copy
+        // costs nothing and eliminates a class of "iterating while
+        // observers fire" races.
+        let candidates = Array(conversation.messages).filter { message in
+            message.role == .assistant
+                && message.content.isEmpty
+                && message.interruptionReason == nil
+        }
+        guard !candidates.isEmpty else { return }
+
+        for message in candidates {
             message.interruptionReason =
                 "Stream interrupted — the app was closed or the server disconnected before any tokens arrived."
-            changed = true
         }
-        if changed {
-            try? modelContext.save()
-        }
+        try? modelContext.save()
     }
 
     // MARK: - Core generation loop

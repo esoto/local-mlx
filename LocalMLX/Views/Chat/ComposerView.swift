@@ -153,13 +153,17 @@ struct ComposerView: View {
         for provider in providers {
             // Prefer the image UTI so screenshots and raw images come
             // through as data; fall back to a file URL so things
-            // Finder-dragged from disk still work.
+            // Finder-dragged from disk still work. NSItemProvider
+            // callbacks fire on an internal background queue, so every
+            // path hops to main before touching SwiftUI state.
             if provider.canLoadObject(ofClass: NSImage.self) {
                 _ = provider.loadDataRepresentation(
                     forTypeIdentifier: UTType.image.identifier
                 ) { data, _ in
                     if let data = data {
-                        attachDataInBackground(data, mimeType: "image/png")
+                        DispatchQueue.main.async {
+                            attachData(data, mimeType: "image/png")
+                        }
                     }
                 }
             } else if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
@@ -172,7 +176,9 @@ struct ComposerView: View {
                           let fileData = try? Data(contentsOf: url)
                     else { return }
                     let mime = mimeForURL(url)
-                    attachDataInBackground(fileData, mimeType: mime)
+                    DispatchQueue.main.async {
+                        attachData(fileData, mimeType: mime)
+                    }
                 }
             }
         }
@@ -181,7 +187,7 @@ struct ComposerView: View {
     private func handleFileURLs(_ urls: [URL]) {
         for url in urls {
             guard let data = try? Data(contentsOf: url) else { continue }
-            attachDataInBackground(data, mimeType: mimeForURL(url))
+            attachData(data, mimeType: mimeForURL(url))
         }
     }
 
@@ -189,31 +195,31 @@ struct ComposerView: View {
         let pb = NSPasteboard.general
         if let image = pb.readObjects(forClasses: [NSImage.self])?.first as? NSImage,
            let data = imagePNGData(image) {
-            attachDataInBackground(data, mimeType: "image/png")
+            attachData(data, mimeType: "image/png")
             return true
         }
         return false
     }
 
-    /// Process raw image bytes off the main thread, then hop back to
-    /// update the `@State attachments` binding. The processing step
-    /// (NSImage decode + JPEG re-encode) can be hundreds of
-    /// milliseconds for a large screenshot — doing it on main made
-    /// Send clicks feel unresponsive after a big drop.
-    private func attachDataInBackground(_ data: Data, mimeType: String) {
-        Task.detached(priority: .userInitiated) {
-            guard let processed = ImageProcessing.process(data, originalMimeType: mimeType) else {
-                return
-            }
-            let pending = ChatViewModel.PendingAttachment(
+    /// Process raw image bytes and append the result to `attachments`.
+    /// Runs synchronously on the main actor — safe because
+    /// `ImageProcessing` is now CoreGraphics-based and a typical drop
+    /// finishes in a few tens of milliseconds even for a 12 MP
+    /// screenshot. The earlier attempt to move this onto
+    /// `Task.detached` had to capture the whole view struct (including
+    /// `@FocusState` and non-Sendable callbacks), which interacts
+    /// poorly with SwiftUI state at runtime. Keeping it on main is
+    /// boring and correct.
+    private func attachData(_ data: Data, mimeType: String) {
+        guard let processed = ImageProcessing.process(data, originalMimeType: mimeType) else {
+            return
+        }
+        attachments.append(
+            ChatViewModel.PendingAttachment(
                 data: processed.data,
                 mimeType: processed.mimeType,
                 width: processed.width,
-                height: processed.height)
-            await MainActor.run {
-                attachments.append(pending)
-            }
-        }
+                height: processed.height))
     }
 
     // MARK: - Helpers
