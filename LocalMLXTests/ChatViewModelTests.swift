@@ -73,10 +73,24 @@ final class ChatViewModelTests: XCTestCase {
 
     // MARK: - Fixtures
 
+    /// SwiftData 2.x invalidates persistent identifiers as soon as a
+    /// `ModelContainer` is deinitialized. Tests that destructure the tuple
+    /// from `makeFixtures` with `_` for the container would drop it
+    /// immediately, so retain every container in an instance property for
+    /// the lifetime of the test case.
+    private var retainedContainers: [ModelContainer] = []
+
+    override func tearDown() {
+        retainedContainers.removeAll()
+        super.tearDown()
+    }
+
     private func makeContainer() throws -> ModelContainer {
         let schema = Schema([Conversation.self, Message.self])
         let config = ModelConfiguration(isStoredInMemoryOnly: true)
-        return try ModelContainer(for: schema, configurations: [config])
+        let container = try ModelContainer(for: schema, configurations: [config])
+        retainedContainers.append(container)
+        return container
     }
 
     private func makeFixtures(

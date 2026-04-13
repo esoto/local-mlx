@@ -26,7 +26,8 @@ final class ModelsViewModel {
 
     private let client: any MLXClientProtocol
     private let log = Logger(subsystem: "dev.localmlx", category: "models")
-    private var pollingTask: Task<Void, Never>?
+    @ObservationIgnored
+    nonisolated(unsafe) private var pollingTask: Task<Void, Never>?
 
     init(client: any MLXClientProtocol) {
         self.client = client

@@ -131,7 +131,9 @@ final class ChatExporterTests: XCTestCase {
 
     func test_suggestedFilename_sanitizesSpecialCharacters() {
         let convo = Conversation(title: "my /\\: chat?")
-        XCTAssertEqual(ChatExporter.suggestedFilename(for: convo), "my ---- chat-.md")
+        // "/", "\", ":" each become "-", "?" becomes "-". Three disallowed
+        // chars before the second space, one at the end.
+        XCTAssertEqual(ChatExporter.suggestedFilename(for: convo), "my --- chat-.md")
     }
 
     func test_suggestedFilename_fallsBackToChatForEmptyTitle() {

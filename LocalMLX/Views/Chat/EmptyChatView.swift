@@ -41,27 +41,7 @@ struct EmptyChatView: View {
                     Button {
                         onExampleTap(example.1)
                     } label: {
-                        HStack(alignment: .top, spacing: 10) {
-                            Image(systemName: example.0)
-                                .foregroundStyle(.accent)
-                                .font(.body)
-                            Text(example.1)
-                                .font(.callout)
-                                .multilineTextAlignment(.leading)
-                                .lineLimit(3)
-                                .foregroundStyle(.primary)
-                            Spacer(minLength: 0)
-                        }
-                        .padding(12)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(
-                            RoundedRectangle(cornerRadius: 8)
-                                .fill(Color.secondary.opacity(0.08))
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 8)
-                                .stroke(Color.secondary.opacity(0.15), lineWidth: 0.5)
-                        )
+                        ExampleCard(icon: example.0, text: example.1)
                     }
                     .buttonStyle(.plain)
                 }
@@ -71,5 +51,34 @@ struct EmptyChatView: View {
             Spacer()
         }
         .padding(24)
+    }
+}
+
+private struct ExampleCard: View {
+    let icon: String
+    let text: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: icon)
+                .foregroundStyle(.tint)
+                .font(.body)
+            Text(text)
+                .font(.callout)
+                .multilineTextAlignment(.leading)
+                .lineLimit(3)
+                .foregroundStyle(.primary)
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.secondary.opacity(0.08))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.secondary.opacity(0.15), lineWidth: 0.5)
+        )
     }
 }

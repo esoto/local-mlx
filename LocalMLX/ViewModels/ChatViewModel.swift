@@ -49,7 +49,10 @@ final class ChatViewModel {
 
         errorBanner = nil
 
-        let sendTime = now()
+        // Monotonic timestamp: under a frozen test clock two successive
+        // sends would otherwise tie on createdAt, and Swift's sort isn't
+        // stable so sortedMessages would interleave the histories.
+        let sendTime = nextTimestamp(after: conversation.sortedMessages.last?.createdAt)
         let userMsg = Message(
             role: .user,
             content: trimmed,
@@ -339,6 +342,16 @@ final class ChatViewModel {
     }
 
     // MARK: - Helpers
+
+    /// Clamp `now()` to strictly after the last known message timestamp so
+    /// successive messages are always ordered — even when tests freeze
+    /// `now` on a constant.
+    private func nextTimestamp(after prior: Date?) -> Date {
+        let t = now()
+        guard let prior else { return t }
+        let minimum = prior.addingTimeInterval(0.002)  // >asst placeholder offset
+        return t > minimum ? t : minimum
+    }
 
     /// For defaults like temperature=0.7, top_p=1.0 we always send the value.
     /// For presence/frequency penalties (default 0) we want to OMIT when 0 so
