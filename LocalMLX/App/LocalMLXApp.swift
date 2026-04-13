@@ -98,6 +98,9 @@ private struct NewChatCommand: View {
 
 extension Notification.Name {
     static let newChatRequested = Notification.Name("LocalMLX.newChatRequested")
+    /// Posted with a `UUID` as the object when the UI should switch the
+    /// main window to a different conversation (e.g. after forking).
+    static let conversationActivated = Notification.Name("LocalMLX.conversationActivated")
 }
 
 // MARK: - MLXClient environment injection

@@ -43,6 +43,9 @@ struct RootView: View {
         .onReceive(NotificationCenter.default.publisher(for: .newChatRequested)) { _ in
             createNewChat()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .conversationActivated)) { note in
+            if let id = note.object as? UUID { selectedID = id }
+        }
     }
 
     private var selectedConversation: Conversation? {

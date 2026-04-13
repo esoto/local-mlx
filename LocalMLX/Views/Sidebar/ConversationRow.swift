@@ -29,7 +29,12 @@ struct ConversationRow: View {
             Spacer(minLength: 0)
         }
         .contentShape(Rectangle())
-        .onTapGesture(count: 2) { beginRenaming() }
+        // Double-click to rename must NOT block the List's single-click
+        // selection. `simultaneousGesture` runs alongside the built-in
+        // row selection recognizer instead of swallowing its events.
+        .simultaneousGesture(
+            TapGesture(count: 2).onEnded { beginRenaming() }
+        )
         .contextMenu {
             Button("Rename") { beginRenaming() }
         }

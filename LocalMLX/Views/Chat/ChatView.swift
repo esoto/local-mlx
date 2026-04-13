@@ -13,7 +13,6 @@ struct ChatView: View {
     @State private var viewModel: ChatViewModel?
     @State private var draft: String = ""
     @State private var editingMessage: Message?
-    @State private var showingEditSheet = false
     @State private var showingExporter = false
     @State private var exportDocument: MarkdownDocument?
 
@@ -63,27 +62,20 @@ struct ChatView: View {
                 try? modelContext.save()
             }
         }
-        .sheet(isPresented: $showingEditSheet) {
-            if let message = editingMessage {
-                EditMessageSheet(
-                    originalText: message.content,
-                    onCommit: { newText in
-                        let target = message
-                        showingEditSheet = false
-                        editingMessage = nil
-                        Task {
-                            await viewModel?.editAndResend(
-                                userMessage: target,
-                                newContent: newText,
-                                in: conversation)
-                        }
-                    },
-                    onCancel: {
-                        showingEditSheet = false
-                        editingMessage = nil
+        .sheet(item: $editingMessage) { message in
+            EditMessageSheet(
+                originalText: message.content,
+                onCommit: { newText in
+                    editingMessage = nil
+                    Task {
+                        await viewModel?.editAndResend(
+                            userMessage: message,
+                            newContent: newText,
+                            in: conversation)
                     }
-                )
-            }
+                },
+                onCancel: { editingMessage = nil }
+            )
         }
         .fileExporter(
             isPresented: $showingExporter,
@@ -111,13 +103,16 @@ struct ChatView: View {
                 },
                 onEdit: { msg in
                     editingMessage = msg
-                    showingEditSheet = true
                 },
                 onDelete: { msg in
                     viewModel?.delete(message: msg, in: conversation)
                 },
                 onFork: { msg in
-                    _ = viewModel?.branch(atMessage: msg, from: conversation)
+                    if let fork = viewModel?.branch(atMessage: msg, from: conversation) {
+                        NotificationCenter.default.post(
+                            name: .conversationActivated,
+                            object: fork.id)
+                    }
                 }
             )
         }
@@ -198,7 +193,6 @@ private struct EditMessageSheet: View {
             Text("Edit message and resend")
                 .font(.headline)
             TextEditor(text: $text)
-                .frame(minWidth: 420, minHeight: 120)
                 .padding(6)
                 .background(Color(NSColor.textBackgroundColor))
                 .overlay(
@@ -215,6 +209,9 @@ private struct EditMessageSheet: View {
             }
         }
         .padding(20)
+        // Sheets on macOS need an explicit frame — without one the outer
+        // VStack can collapse around an empty-looking content area.
+        .frame(minWidth: 520, idealWidth: 560, minHeight: 240, idealHeight: 280)
     }
 }
 

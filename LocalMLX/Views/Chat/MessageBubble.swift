@@ -25,6 +25,41 @@ struct MessageBubble: View {
         .overlay(alignment: .topTrailing) {
             if isHovered { hoverActions }
         }
+        // Right-click also exposes every action — hover-only controls
+        // are hard to discover, especially on a trackpad.
+        .contextMenu { actionMenuItems }
+    }
+
+    @ViewBuilder
+    private var actionMenuItems: some View {
+        Button {
+            let pb = NSPasteboard.general
+            pb.clearContents()
+            pb.setString(message.content, forType: .string)
+        } label: {
+            Label("Copy", systemImage: "doc.on.doc")
+        }
+        if let onEdit, isUser {
+            Button(action: onEdit) {
+                Label("Edit and resend", systemImage: "pencil")
+            }
+        }
+        if let onRegenerate, !isUser {
+            Button(action: onRegenerate) {
+                Label("Regenerate", systemImage: "arrow.clockwise")
+            }
+        }
+        if let onFork {
+            Button(action: onFork) {
+                Label("Fork from here", systemImage: "arrow.triangle.branch")
+            }
+        }
+        if let onDelete {
+            Divider()
+            Button(role: .destructive, action: onDelete) {
+                Label("Delete message", systemImage: "trash")
+            }
+        }
     }
 
     // MARK: - Pieces

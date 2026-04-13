@@ -21,9 +21,14 @@ struct ComposerView: View {
                         .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
                 )
                 .focused($focused)
-                .onSubmit(handleSubmit)
                 .onAppear { focused = true }
-                // ⌘↩ to send, from the key-equivalent on the Send button below.
+                // Enter sends, Shift+Enter inserts a newline. ⌘↩ still
+                // works via the Send button's keyEquivalent below.
+                .onKeyPress(keys: [.return], phases: .down) { press in
+                    if press.modifiers.contains(.shift) { return .ignored }
+                    handleSubmit()
+                    return .handled
+                }
 
             if isStreaming {
                 Button(action: onStop) {

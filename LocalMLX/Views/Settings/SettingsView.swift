@@ -43,11 +43,17 @@ struct SettingsView: View {
                     Text(String(format: "%.2f", settings.defaultTopP))
                         .frame(width: 40)
                 }
-                HStack {
-                    Text("Max tokens")
-                    Stepper(value: $settings.defaultMaxTokens, in: 16...8192, step: 64) {
-                        Text("\(settings.defaultMaxTokens)")
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text("Max output tokens")
+                        Stepper(value: $settings.defaultMaxTokens, in: 16...16384, step: 64) {
+                            Text("\(settings.defaultMaxTokens)")
+                        }
                     }
+                    Text("Upper bound on tokens per assistant reply. The model's own context window is set by the `mlx_lm.server` process, not here.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }

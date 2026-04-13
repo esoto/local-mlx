@@ -9,7 +9,7 @@ enum MessageRole: String, Codable, Sendable {
 }
 
 @Model
-final class Message {
+final class Message: Identifiable {
     @Attribute(.unique) var id: UUID
     var roleRaw: String
     var content: String
