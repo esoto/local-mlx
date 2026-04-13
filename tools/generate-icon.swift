@@ -43,32 +43,48 @@ let sizes: [IconSize] = [
 /// The design is a rounded purple-to-blue square with a centered white
 /// "sparkles" glyph — matching the sparkles used in-app for the assistant
 /// avatar, so it reads as "AI chat" at a glance.
+///
+/// Uses `CGContext` directly rather than `NSImage.lockFocus()`, which
+/// needs an AppKit event loop and crashes when run from a headless
+/// command-line binary.
 func renderIcon(size: Int) -> Data {
     let dimension = CGFloat(size)
     let rect = CGRect(x: 0, y: 0, width: dimension, height: dimension)
+    let colorSpace = CGColorSpaceCreateDeviceRGB()
 
-    let image = NSImage(size: NSSize(width: dimension, height: dimension))
-    image.lockFocus()
-    defer { image.unlockFocus() }
-
-    guard let ctx = NSGraphicsContext.current?.cgContext else {
-        fatalError("Failed to acquire CGContext for size \(size)")
+    guard let ctx = CGContext(
+        data: nil,
+        width: size,
+        height: size,
+        bitsPerComponent: 8,
+        bytesPerRow: 0,
+        space: colorSpace,
+        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+    ) else {
+        fatalError("Failed to create CGContext for size \(size)")
     }
 
-    // Background gradient: deep purple → cobalt blue.
+    // Background gradient clipped to a rounded rect: deep purple → cobalt blue.
     let cornerRadius = dimension * 0.22
-    let path = NSBezierPath(roundedRect: rect, xRadius: cornerRadius, yRadius: cornerRadius)
-    path.addClip()
+    let roundedPath = CGPath(
+        roundedRect: rect,
+        cornerWidth: cornerRadius,
+        cornerHeight: cornerRadius,
+        transform: nil)
+    ctx.addPath(roundedPath)
+    ctx.clip()
 
     let colors = [
         CGColor(red: 0.43, green: 0.22, blue: 0.93, alpha: 1.0),   // #6D37ED
         CGColor(red: 0.18, green: 0.36, blue: 0.93, alpha: 1.0),   // #2E5CEC
-    ]
-    let gradient = CGGradient(
-        colorsSpace: CGColorSpaceCreateDeviceRGB(),
-        colors: colors as CFArray,
+    ] as CFArray
+    guard let gradient = CGGradient(
+        colorsSpace: colorSpace,
+        colors: colors,
         locations: [0.0, 1.0]
-    )!
+    ) else {
+        fatalError("Failed to build gradient for size \(size)")
+    }
     ctx.drawLinearGradient(
         gradient,
         start: CGPoint(x: 0, y: dimension),
@@ -76,77 +92,53 @@ func renderIcon(size: Int) -> Data {
         options: []
     )
 
-    // Subtle inner highlight.
-    let highlight = NSBezierPath(
-        roundedRect: rect.insetBy(dx: dimension * 0.03, dy: dimension * 0.03),
-        xRadius: cornerRadius * 0.9,
-        yRadius: cornerRadius * 0.9
-    )
-    NSColor.white.withAlphaComponent(0.06).setFill()
-    highlight.fill()
+    // Subtle inner highlight — a slightly smaller rounded rect filled
+    // with white at very low alpha.
+    let inset = dimension * 0.03
+    let highlightPath = CGPath(
+        roundedRect: rect.insetBy(dx: inset, dy: inset),
+        cornerWidth: cornerRadius * 0.9,
+        cornerHeight: cornerRadius * 0.9,
+        transform: nil)
+    ctx.addPath(highlightPath)
+    ctx.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 0.06))
+    ctx.fillPath()
 
-    // Sparkles glyph — use the SF Symbol if the OS provides it, else fall
-    // back to a large centered dot so the script still runs on older OSes.
-    let glyphFontSize = dimension * 0.58
-    let attributes: [NSAttributedString.Key: Any] = [
-        .font: NSFont.systemFont(ofSize: glyphFontSize, weight: .bold),
-        .foregroundColor: NSColor.white
+    // Centered glyph drawn via Core Text so we don't need AppKit focus.
+    let glyph = "✦"
+    let fontSize = dimension * 0.58
+    let font = CTFontCreateWithName("HelveticaNeue-Bold" as CFString, fontSize, nil)
+    let attributes: [CFString: Any] = [
+        kCTFontAttributeName: font,
+        kCTForegroundColorAttributeName: CGColor(red: 1, green: 1, blue: 1, alpha: 1)
     ]
+    let attrString = CFAttributedStringCreate(
+        nil,
+        glyph as CFString,
+        attributes as CFDictionary)!
+    let line = CTLineCreateWithAttributedString(attrString)
+    let bounds = CTLineGetBoundsWithOptions(line, [.useOpticalBounds])
+    ctx.textPosition = CGPoint(
+        x: (dimension - bounds.width) / 2 - bounds.minX,
+        y: (dimension - bounds.height) / 2 - bounds.minY
+    )
+    CTLineDraw(line, ctx)
 
-    let glyph: String
-    if let config = NSImage.SymbolConfiguration(pointSize: glyphFontSize, weight: .bold) as NSImage.SymbolConfiguration?,
-       let symbol = NSImage(systemSymbolName: "sparkles", accessibilityDescription: nil)?
-           .withSymbolConfiguration(config) {
-        let w = symbol.size.width
-        let h = symbol.size.height
-        let scale = min(dimension * 0.6 / w, dimension * 0.6 / h)
-        let drawW = w * scale
-        let drawH = h * scale
-        let drawRect = NSRect(
-            x: (dimension - drawW) / 2,
-            y: (dimension - drawH) / 2,
-            width: drawW,
-            height: drawH
-        )
-        // Tint the symbol white.
-        NSColor.white.set()
-        symbol.draw(
-            in: drawRect,
-            from: .zero,
-            operation: .sourceAtop,
-            fraction: 1.0,
-            respectFlipped: true,
-            hints: nil
-        )
-        // Also overlay a white-coloring pass via a rectangle with sourceIn.
-        ctx.setBlendMode(.sourceAtop)
-        NSColor.white.setFill()
-        drawRect.fill()
-        ctx.setBlendMode(.normal)
-        glyph = ""
-    } else {
-        glyph = "✦"
+    // Encode to PNG via CGImageDestination.
+    guard let cgImage = ctx.makeImage() else {
+        fatalError("Failed to snapshot CGContext for size \(size)")
     }
-
-    if !glyph.isEmpty {
-        let text = glyph as NSString
-        let textSize = text.size(withAttributes: attributes)
-        let textRect = NSRect(
-            x: (dimension - textSize.width) / 2,
-            y: (dimension - textSize.height) / 2,
-            width: textSize.width,
-            height: textSize.height
-        )
-        text.draw(in: textRect, withAttributes: attributes)
+    let data = NSMutableData()
+    guard let dest = CGImageDestinationCreateWithData(
+        data, "public.png" as CFString, 1, nil
+    ) else {
+        fatalError("Failed to create PNG destination for size \(size)")
     }
-
-    // Convert to PNG.
-    guard let tiffData = image.tiffRepresentation,
-          let bitmap = NSBitmapImageRep(data: tiffData),
-          let pngData = bitmap.representation(using: .png, properties: [:]) else {
-        fatalError("Failed to encode PNG for size \(size)")
+    CGImageDestinationAddImage(dest, cgImage, nil)
+    guard CGImageDestinationFinalize(dest) else {
+        fatalError("Failed to finalize PNG for size \(size)")
     }
-    return pngData
+    return data as Data
 }
 
 // MARK: - Contents.json
