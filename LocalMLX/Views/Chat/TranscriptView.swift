@@ -6,6 +6,7 @@ struct TranscriptView: View {
     var onRegenerate: ((Message) -> Void)?
     var onEdit: ((Message) -> Void)?
     var onDelete: ((Message) -> Void)?
+    var onFork: ((Message) -> Void)?
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -16,7 +17,8 @@ struct TranscriptView: View {
                             message: message,
                             onRegenerate: onRegenerate.map { cb in { cb(message) } },
                             onEdit: onEdit.map { cb in { cb(message) } },
-                            onDelete: onDelete.map { cb in { cb(message) } }
+                            onDelete: onDelete.map { cb in { cb(message) } },
+                            onFork: onFork.map { cb in { cb(message) } }
                         )
                         .id(message.id)
                     }

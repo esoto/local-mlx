@@ -6,12 +6,14 @@ A native macOS chat app for a local [`mlx-lm`](https://github.com/ml-explore/mlx
 
 - **Multi-conversation sidebar** with new/rename/delete, persisted via SwiftData, grouped by date (Today, Yesterday, Last 7 days, Last 30 days, Older).
 - **Search across all chats** by title and message content.
+- **Multi-window:** right-click any conversation in the sidebar and pick "Open in New Window" to work on two chats side-by-side.
 - **Live token streaming** from `mlx_lm.server` with a Stop button that cancels mid-generation and preserves partial content.
 - **Tokens-per-second** and token counts displayed on each assistant reply, sourced from the server's `usage` payload with a wall-clock fallback.
 - **Stream-interrupted footer** on the specific message when a stream errors mid-response — your partial reply is never silently dropped.
-- **Regenerate, edit-and-resend, delete, and copy** buttons on every message (hover to reveal).
+- **Regenerate, edit-and-resend, fork, delete, and copy** buttons on every message (hover to reveal). Forking creates a new conversation branched from exactly that message.
+- **System-prompt presets** (Concise, Code reviewer, Socratic teacher, Summarizer, Brainstormer, Translator, JSON shaper) one click from the chat header.
 - **Model picker** from `/v1/models` with refresh and an "offline" fallback marker when the selected model isn't currently loaded.
-- **Connection status dot** in the chat header (green/red) so you see at a glance whether the server is reachable.
+- **Auto-polling connection status dot** in the chat header — green / red / gray, refreshed every 15 seconds in the background.
 - **Per-chat system prompt** and full sampling controls: temperature, top_p, max tokens, presence / frequency / repetition penalties, and an optional seed.
 - **Markdown rendering** with fenced code blocks and **Swift syntax highlighting** via [swift-markdown-ui](https://github.com/gonzalezreal/swift-markdown-ui) + [Splash](https://github.com/JohnSundell/Splash).
 - **Empty-chat state** with example prompts so a fresh chat isn't just a blinking cursor.
@@ -32,10 +34,15 @@ A native macOS chat app for a local [`mlx-lm`](https://github.com/ml-explore/mlx
 # one-time
 brew install xcodegen
 
+# optional but recommended: generate the app icon PNGs (runs on macOS)
+swift tools/generate-icon.swift
+
 # from the repo root
 xcodegen generate
 open LocalMLX.xcodeproj       # then press ⌘R in Xcode to run
 ```
+
+The icon generator is a standalone Swift script that uses AppKit / Core Graphics to draw a purple-to-blue gradient with the sparkles glyph at all required `@2x` sizes and writes them into `LocalMLX/Resources/Assets.xcassets/AppIcon.appiconset/`. Run it once — the PNGs can be checked in.
 
 ## Running the MLX server (for testing)
 

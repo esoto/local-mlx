@@ -317,4 +317,100 @@ final class ChatViewModelTests: XCTestCase {
         XCTAssertEqual(convo.messages.count, 1)
         XCTAssertFalse(convo.messages.contains(where: { $0 === target }))
     }
+
+    // MARK: - branch
+
+    func test_branch_createsNewConversationWithMessagesUpToAndIncludingPivot() async throws {
+        let (vm, client, container, convo) = try makeFixtures()
+        let ctx = container.mainContext
+
+        // Build a 4-message history: user1 / asst1 / user2 / asst2.
+        client.behavior = .deltas(["reply1"], perTokenDelay: 0)
+        await vm.send("question 1", in: convo)
+        client.behavior = .deltas(["reply2"], perTokenDelay: 0)
+        await vm.send("question 2", in: convo)
+
+        XCTAssertEqual(convo.messages.count, 4)
+        let sorted = convo.sortedMessages
+        let pivot = sorted[1]   // asst1
+
+        let fork = vm.branch(atMessage: pivot, from: convo)
+
+        // Source conversation untouched.
+        XCTAssertEqual(convo.messages.count, 4)
+
+        // Fork has exactly the first two messages, copied by value.
+        XCTAssertNotNil(fork)
+        XCTAssertEqual(fork?.messages.count, 2)
+        let forkMsgs = fork?.sortedMessages ?? []
+        XCTAssertEqual(forkMsgs.map(\.role), [.user, .assistant])
+        XCTAssertEqual(forkMsgs.map(\.content), ["question 1", "reply1"])
+
+        // The fork's messages are independent instances.
+        XCTAssertFalse(forkMsgs.contains(where: { $0 === sorted[0] }))
+        XCTAssertFalse(forkMsgs.contains(where: { $0 === sorted[1] }))
+
+        // The fork was inserted into the same context as the source.
+        let allConvos = try ctx.fetch(FetchDescriptor<Conversation>())
+        XCTAssertEqual(allConvos.count, 2)
+    }
+
+    func test_branch_copiesConversationSettings() async throws {
+        let (vm, _, _, convo) = try makeFixtures()
+        convo.systemPrompt = "be terse"
+        convo.temperature = 0.3
+        convo.topP = 0.9
+        convo.maxTokens = 512
+        convo.presencePenalty = 0.2
+        convo.frequencyPenalty = 0.1
+        convo.repetitionPenalty = 1.1
+        convo.seed = 7
+
+        await vm.send("hi", in: convo)
+        let pivot = convo.sortedMessages.last!
+        let fork = vm.branch(atMessage: pivot, from: convo)
+
+        XCTAssertEqual(fork?.systemPrompt, "be terse")
+        XCTAssertEqual(fork?.temperature, 0.3)
+        XCTAssertEqual(fork?.topP, 0.9)
+        XCTAssertEqual(fork?.maxTokens, 512)
+        XCTAssertEqual(fork?.presencePenalty, 0.2)
+        XCTAssertEqual(fork?.frequencyPenalty, 0.1)
+        XCTAssertEqual(fork?.repetitionPenalty, 1.1)
+        XCTAssertEqual(fork?.seed, 7)
+        XCTAssertEqual(fork?.modelId, "test-model")
+    }
+
+    func test_branch_titlesForkWithForkSuffix() async throws {
+        let (vm, _, _, convo) = try makeFixtures()
+        convo.title = "My chat"
+        await vm.send("hi", in: convo)
+        let pivot = convo.sortedMessages.last!
+
+        let fork = vm.branch(atMessage: pivot, from: convo)
+        XCTAssertEqual(fork?.title, "My chat (fork)")
+    }
+
+    func test_branch_returnsNil_whenPivotNotFoundInConversation() throws {
+        let container = try makeContainer()
+        let ctx = container.mainContext
+
+        let convoA = Conversation(title: "A")
+        let convoB = Conversation(title: "B")
+        ctx.insert(convoA)
+        ctx.insert(convoB)
+
+        let strayMessage = Message(role: .user, content: "stray",
+                                   createdAt: .now, conversation: convoB)
+        ctx.insert(strayMessage)
+        try ctx.save()
+
+        let client = FakeMLXClient()
+        let vm = ChatViewModel(client: client, modelContext: ctx,
+                               now: { Date(timeIntervalSince1970: 42) })
+
+        // Pivot belongs to convoB, not convoA.
+        let result = vm.branch(atMessage: strayMessage, from: convoA)
+        XCTAssertNil(result)
+    }
 }

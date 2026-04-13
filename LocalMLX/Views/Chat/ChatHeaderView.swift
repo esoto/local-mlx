@@ -102,7 +102,11 @@ struct ChatHeaderView: View {
     private var advancedControls: some View {
         VStack(alignment: .leading, spacing: 10) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("System prompt").font(.caption).foregroundStyle(.secondary)
+                HStack {
+                    Text("System prompt").font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    presetMenu
+                }
                 TextEditor(text: $conversation.systemPrompt)
                     .font(.body)
                     .frame(minHeight: 50, maxHeight: 100)
@@ -159,6 +163,26 @@ struct ChatHeaderView: View {
                     .foregroundStyle(.secondary)
             }
         }
+    }
+
+    // MARK: - Preset menu
+
+    private var presetMenu: some View {
+        Menu {
+            ForEach(SystemPromptPresets.builtIn) { preset in
+                Button {
+                    conversation.systemPrompt = preset.content
+                } label: {
+                    Label(preset.name, systemImage: preset.icon)
+                }
+            }
+        } label: {
+            Label("Presets", systemImage: "square.stack.3d.up")
+                .labelStyle(.titleAndIcon)
+                .font(.caption)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
     }
 
     @ViewBuilder

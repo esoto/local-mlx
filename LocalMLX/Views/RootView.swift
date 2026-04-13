@@ -7,6 +7,7 @@ struct RootView: View {
 
     @Environment(\.modelContext) private var modelContext
     @Environment(\.mlxClient) private var clientHolder
+    @Environment(\.openWindow) private var openWindow
     @EnvironmentObject private var settings: AppSettings
 
     @Query(sort: [SortDescriptor(\Conversation.updatedAt, order: .reverse)])
@@ -20,7 +21,8 @@ struct RootView: View {
                 conversations: conversations,
                 selection: $selectedID,
                 onNewChat: createNewChat,
-                onDelete: deleteConversation
+                onDelete: deleteConversation,
+                onOpenInNewWindow: { openWindow(id: "chat", value: $0.id) }
             )
             .navigationSplitViewColumnWidth(min: 200, ideal: 240)
         } detail: {

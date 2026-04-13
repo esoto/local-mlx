@@ -6,6 +6,18 @@ struct LocalMLXApp: App {
 
     @StateObject private var settings = AppSettings()
 
+    /// One shared ModelsViewModel for the whole app so every window sees
+    /// the same connection status and model list. Held as a `let` because
+    /// the App struct is constructed exactly once by SwiftUI, so reference
+    /// identity is naturally stable; the view model is an `@Observable`
+    /// class, so its properties are still tracked in views that read them.
+    @MainActor
+    private static let sharedModelsVM: ModelsViewModel = ModelsViewModel(
+        client: LiveMLXClient(baseURL: { AppSettings.makeBaseURL() })
+    )
+
+    private var modelsVM: ModelsViewModel { Self.sharedModelsVM }
+
     private let modelContainer: ModelContainer = {
         let schema = Schema([Conversation.self, Message.self])
         do {
@@ -14,9 +26,6 @@ struct LocalMLXApp: App {
                 configurations: [ModelConfiguration(schema: schema)]
             )
         } catch {
-            // Falling back to in-memory storage keeps the app launchable even
-            // if the on-disk store is corrupt; the alternative is a crash on
-            // first launch, which is much worse UX.
             NSLog("LocalMLX: SwiftData container failed: \(error). Using in-memory store.")
             let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
             // swiftlint:disable:next force_try
@@ -36,7 +45,12 @@ struct LocalMLXApp: App {
             RootView()
                 .environmentObject(settings)
                 .environment(\.mlxClient, clientHolder)
+                .environment(modelsVM)
                 .frame(minWidth: 800, minHeight: 500)
+                .task {
+                    // Kick off polling the first time the main window appears.
+                    modelsVM.startPolling()
+                }
         }
         .modelContainer(modelContainer)
         .commands {
@@ -44,6 +58,24 @@ struct LocalMLXApp: App {
                 NewChatCommand()
             }
         }
+
+        // Detail window — one per conversation, addressable by UUID.
+        WindowGroup(id: "chat", for: UUID.self) { $conversationID in
+            if let id = conversationID {
+                SingleChatWindow(conversationID: id)
+                    .environmentObject(settings)
+                    .environment(\.mlxClient, clientHolder)
+                    .environment(modelsVM)
+                    .frame(minWidth: 720, minHeight: 500)
+            } else {
+                ContentUnavailableView(
+                    "No Conversation",
+                    systemImage: "xmark.octagon",
+                    description: Text("This window was opened without a conversation id.")
+                )
+            }
+        }
+        .modelContainer(modelContainer)
 
         Settings {
             SettingsView()

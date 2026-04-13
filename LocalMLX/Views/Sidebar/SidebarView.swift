@@ -5,6 +5,7 @@ struct SidebarView: View {
     @Binding var selection: UUID?
     let onNewChat: () -> Void
     let onDelete: (Conversation) -> Void
+    var onOpenInNewWindow: ((Conversation) -> Void)?
 
     @State private var searchText: String = ""
 
@@ -16,6 +17,14 @@ struct SidebarView: View {
                         ConversationRow(conversation: convo)
                             .tag(convo.id)
                             .contextMenu {
+                                if let onOpenInNewWindow {
+                                    Button {
+                                        onOpenInNewWindow(convo)
+                                    } label: {
+                                        Label("Open in New Window", systemImage: "macwindow.badge.plus")
+                                    }
+                                    Divider()
+                                }
                                 Button(role: .destructive) {
                                     onDelete(convo)
                                 } label: {

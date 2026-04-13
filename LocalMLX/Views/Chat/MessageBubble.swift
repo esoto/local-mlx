@@ -5,6 +5,7 @@ struct MessageBubble: View {
     var onRegenerate: (() -> Void)?
     var onEdit: (() -> Void)?
     var onDelete: (() -> Void)?
+    var onFork: (() -> Void)?
 
     @State private var isHovered = false
 
@@ -111,6 +112,17 @@ struct MessageBubble: View {
                 .buttonStyle(.borderless)
                 .foregroundStyle(.secondary)
                 .help("Regenerate")
+            }
+
+            if let onFork {
+                Button(action: onFork) {
+                    Image(systemName: "arrow.triangle.branch")
+                        .font(.caption2)
+                        .frame(width: 16, height: 16)
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
+                .help("Fork chat from this message")
             }
 
             if let onDelete {

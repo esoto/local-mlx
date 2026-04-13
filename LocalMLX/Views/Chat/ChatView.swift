@@ -7,10 +7,10 @@ struct ChatView: View {
 
     @Environment(\.modelContext) private var modelContext
     @Environment(\.mlxClient) private var clientHolder
+    @Environment(ModelsViewModel.self) private var modelsVM
     @EnvironmentObject private var settings: AppSettings
 
     @State private var viewModel: ChatViewModel?
-    @State private var modelsVM: ModelsViewModel?
     @State private var draft: String = ""
     @State private var editingMessage: Message?
     @State private var showingEditSheet = false
@@ -56,12 +56,9 @@ struct ChatView: View {
                     modelContext: modelContext
                 )
             }
-            if modelsVM == nil {
-                modelsVM = ModelsViewModel(client: clientHolder.client)
-                await modelsVM?.refresh()
-            }
-            if conversation.modelId == nil,
-               let first = modelsVM?.models.first {
+            // If the conversation has no model yet, try to pick one from the
+            // shared (already-polling) ModelsViewModel.
+            if conversation.modelId == nil, let first = modelsVM.models.first {
                 conversation.modelId = first
                 try? modelContext.save()
             }
@@ -118,6 +115,9 @@ struct ChatView: View {
                 },
                 onDelete: { msg in
                     viewModel?.delete(message: msg, in: conversation)
+                },
+                onFork: { msg in
+                    _ = viewModel?.branch(atMessage: msg, from: conversation)
                 }
             )
         }

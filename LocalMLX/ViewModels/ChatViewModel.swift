@@ -139,6 +139,75 @@ final class ChatViewModel {
         try? modelContext.save()
     }
 
+    /// Fork the conversation at a specific message. Returns a new
+    /// `Conversation` inserted into the same `ModelContext` with
+    /// independent copies of all messages up to AND including `message`.
+    /// Returns nil if the pivot message does not belong to `source`.
+    ///
+    /// The fork preserves the original `createdAt` timestamps on the
+    /// copied messages so the transcript reads as a natural branch.
+    @discardableResult
+    func branch(atMessage message: Message,
+                from source: Conversation) -> Conversation? {
+        let sorted = source.sortedMessages
+        guard let pivotIdx = sorted.firstIndex(where: { $0 === message }) else {
+            return nil
+        }
+        let kept = sorted.prefix(through: pivotIdx)
+
+        let fork = Conversation(
+            title: Self.forkTitle(from: source.title),
+            createdAt: now(),
+            systemPrompt: source.systemPrompt,
+            modelId: source.modelId,
+            temperature: source.temperature,
+            topP: source.topP,
+            maxTokens: source.maxTokens,
+            presencePenalty: source.presencePenalty,
+            frequencyPenalty: source.frequencyPenalty,
+            repetitionPenalty: source.repetitionPenalty,
+            seed: source.seed
+        )
+        modelContext.insert(fork)
+
+        for original in kept {
+            let copy = Message(
+                role: original.role,
+                content: original.content,
+                createdAt: original.createdAt,
+                conversation: fork,
+                tokensPerSecond: original.tokensPerSecond,
+                promptTokens: original.promptTokens,
+                completionTokens: original.completionTokens,
+                interruptionReason: original.interruptionReason
+            )
+            modelContext.insert(copy)
+        }
+
+        try? modelContext.save()
+        return fork
+    }
+
+    /// Produce a title for a forked conversation. Appends " (fork)" unless
+    /// the source already ends in one, in which case it increments the
+    /// suffix to " (fork 2)", " (fork 3)", etc. so repeatedly forking the
+    /// same branch doesn't produce "… (fork) (fork) (fork)".
+    private static func forkTitle(from source: String) -> String {
+        if source.hasSuffix(" (fork)") {
+            return source.replacingOccurrences(of: " (fork)", with: " (fork 2)")
+        }
+        // Detect " (fork N)" suffix.
+        if let match = source.range(of: #" \(fork (\d+)\)$"#, options: .regularExpression) {
+            let numberSubstring = source[match]
+                .trimmingCharacters(in: CharacterSet(charactersIn: " (fork)"))
+            if let n = Int(numberSubstring) {
+                let base = String(source[..<match.lowerBound])
+                return "\(base) (fork \(n + 1))"
+            }
+        }
+        return "\(source) (fork)"
+    }
+
     /// Cancel the current streaming task. Partial content is preserved and
     /// no error banner is set.
     func stop() {
