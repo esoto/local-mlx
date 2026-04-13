@@ -111,6 +111,74 @@ final class ServerLauncherTests: XCTestCase {
         XCTAssertTrue(script.contains("exec mlx_lm.server"))
     }
 
+    // MARK: - Preflight port cleanup in start script
+
+    func test_renderScript_foreground_includesPortCleanup() {
+        // A stale server on the same port would block `exec` from
+        // binding. The start script must kill any existing holder
+        // before running its own exec line, or the user sees a
+        // cryptic bind-failure in Terminal.
+        let config = ServerLauncher.Config(
+            modelPath: "m", pythonVenvPath: "", port: 8080)
+        let script = ServerLauncher.renderScript(config)
+        XCTAssertTrue(script.contains("lsof -ti tcp:8080"),
+                      "foreground start must lsof the port preflight")
+        XCTAssertTrue(script.contains("terminate_pid"),
+                      "foreground start must define the terminate helper")
+        XCTAssertTrue(script.contains("kill -9 \"$pid\""),
+                      "preflight cleanup must escalate to SIGKILL if SIGTERM fails")
+    }
+
+    func test_renderScript_background_includesPortCleanup() {
+        let config = ServerLauncher.Config(
+            modelPath: "m",
+            pythonVenvPath: "",
+            port: 8080,
+            background: true,
+            pidFilePath: "/tmp/pid",
+            logFilePath: "/tmp/log")
+        let script = ServerLauncher.renderScript(config)
+        XCTAssertTrue(script.contains("lsof -ti tcp:8080"),
+                      "background start must lsof the port preflight too")
+        XCTAssertTrue(script.contains("terminate_pid"))
+    }
+
+    func test_renderScript_portCleanup_usesPortFromConfig() {
+        let config = ServerLauncher.Config(
+            modelPath: "m", pythonVenvPath: "", port: 9090)
+        let script = ServerLauncher.renderScript(config)
+        XCTAssertTrue(script.contains("lsof -ti tcp:9090"))
+        XCTAssertFalse(script.contains("lsof -ti tcp:8080"),
+                       "custom port must not leak the default 8080")
+    }
+
+    func test_renderScript_portCleanup_precedesExec() {
+        // The lsof check must happen BEFORE the exec / nohup line so
+        // the port is actually free when the new server tries to bind.
+        let config = ServerLauncher.Config(
+            modelPath: "m", pythonVenvPath: "", port: 8080)
+        let script = ServerLauncher.renderScript(config)
+        let lsofRange = script.range(of: "lsof -ti tcp:")!
+        let execRange = script.range(of: "exec mlx_lm.server")!
+        XCTAssertLessThan(lsofRange.lowerBound, execRange.lowerBound,
+                          "preflight cleanup must run before exec")
+    }
+
+    func test_renderScript_portCleanup_precedesNohup() {
+        let config = ServerLauncher.Config(
+            modelPath: "m",
+            pythonVenvPath: "",
+            port: 8080,
+            background: true,
+            pidFilePath: "/tmp/pid",
+            logFilePath: "/tmp/log")
+        let script = ServerLauncher.renderScript(config)
+        let lsofRange = script.range(of: "lsof -ti tcp:")!
+        let nohupRange = script.range(of: "nohup mlx_lm.server")!
+        XCTAssertLessThan(lsofRange.lowerBound, nohupRange.lowerBound,
+                          "preflight cleanup must run before nohup in background mode")
+    }
+
     // MARK: - Vision mode
 
     func test_serverModule_textMode_usesMlxLm() {
